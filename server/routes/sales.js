@@ -238,6 +238,220 @@ router.post("/", (req, res) => {
   });
 });
 
+// NEW: Record payment for a specific sale (FIXED for frontend compatibility)
+router.post("/:id/payment", (req, res) => {
+  const { id } = req.params;
+  const { amount, customerId, notes } = req.body;
+
+  console.log(`=== RECORD PAYMENT FOR SALE ${id} ===`);
+  console.log("Payment data:", { amount, customerId, notes });
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: "Valid payment amount is required" });
+  }
+
+  const sqlite3 = require("sqlite3").verbose();
+  const path = require("path");
+  const dbPath = path.resolve(__dirname, "../brickbook.db");
+  const db = new sqlite3.Database(dbPath);
+
+  // Start transaction
+  db.serialize(() => {
+    db.run("BEGIN TRANSACTION");
+
+    // 1. Get the sale details
+    db.get("SELECT * FROM sales WHERE id = ?", [id], (err, sale) => {
+      if (err) {
+        db.run("ROLLBACK");
+        console.error("Error fetching sale:", err.message);
+        return res.status(500).json({ error: err.message });
+      }
+
+      if (!sale) {
+        db.run("ROLLBACK");
+        return res.status(404).json({ error: "Sale not found" });
+      }
+
+      // Calculate new paid amount
+      const newPaidAmount = Number(sale.paid_amount || 0) + Number(amount);
+      const newDueAmount = Math.max(
+        0,
+        Number(sale.total_amount) - newPaidAmount
+      );
+
+      // Determine payment status
+      let paymentStatus = "Partial";
+      if (newPaidAmount >= Number(sale.total_amount)) {
+        paymentStatus = "Paid";
+      } else if (newPaidAmount === 0) {
+        paymentStatus = "Unpaid";
+      }
+
+      console.log(
+        `Sale details: Total=${sale.total_amount}, Old Paid=${sale.paid_amount}, New Paid=${newPaidAmount}, New Due=${newDueAmount}`
+      );
+
+      // 2. Update the sale with new payment
+      db.run(
+        `UPDATE sales 
+         SET paid_amount = ?, 
+             due_amount = ?,
+             balance_due = ?,
+             payment_status = ?,
+             notes = COALESCE(notes || ' | ', '') || ?
+         WHERE id = ?`,
+        [
+          newPaidAmount,
+          newDueAmount,
+          newDueAmount,
+          paymentStatus,
+          `Payment received: ₹${amount} on ${
+            new Date().toISOString().split("T")[0]
+          } - ${notes || "No notes"}`,
+          id,
+        ],
+        (err) => {
+          if (err) {
+            db.run("ROLLBACK");
+            console.error("Error updating sale payment:", err.message);
+            return res.status(500).json({ error: err.message });
+          }
+
+          console.log("Sale payment updated successfully");
+
+          // 3. Update customer's wallet or outstanding balance
+          // For general payment: if there's a customer, add to wallet
+          // For specific sale payment: reduce outstanding balance
+          const customerIdToUpdate = customerId || sale.customer_id;
+
+          if (customerIdToUpdate) {
+            // Check if this payment should go to wallet or reduce dues
+            // If amount exceeds due amount, put excess in wallet
+            const excessAmount = Math.max(
+              0,
+              Number(amount) - Number(sale.due_amount || 0)
+            );
+            const duesReduction = Number(amount) - excessAmount;
+
+            console.log(
+              `Payment breakdown: Dues reduction=₹${duesReduction}, Excess to wallet=₹${excessAmount}`
+            );
+
+            if (duesReduction > 0) {
+              // Reduce outstanding balance
+              db.run(
+                `UPDATE customers 
+                 SET outstanding_balance = COALESCE(outstanding_balance, 0) - ?,
+                     last_active = datetime('now')
+                 WHERE id = ?`,
+                [duesReduction, customerIdToUpdate],
+                (custErr) => {
+                  if (custErr) {
+                    db.run("ROLLBACK");
+                    console.error(
+                      "Error updating customer dues:",
+                      custErr.message
+                    );
+                    return res.status(500).json({ error: custErr.message });
+                  }
+                  console.log(
+                    `Reduced customer ${customerIdToUpdate} dues by ₹${duesReduction}`
+                  );
+                }
+              );
+            }
+
+            if (excessAmount > 0) {
+              // Add excess to wallet
+              db.run(
+                `UPDATE customers 
+                 SET wallet_balance = COALESCE(wallet_balance, 0) + ?,
+                     last_active = datetime('now')
+                 WHERE id = ?`,
+                [excessAmount, customerIdToUpdate],
+                (walletErr) => {
+                  if (walletErr) {
+                    db.run("ROLLBACK");
+                    console.error("Error updating wallet:", walletErr.message);
+                    return res.status(500).json({ error: walletErr.message });
+                  }
+                  console.log(
+                    `Added ₹${excessAmount} to customer ${customerIdToUpdate} wallet`
+                  );
+                }
+              );
+            }
+
+            // 4. Create transaction record
+            const transactionQuery = `
+              INSERT INTO transactions 
+              (customer_id, amount, type, description, notes, created_at)
+              VALUES (?, ?, ?, ?, ?, datetime('now'))
+            `;
+
+            db.run(
+              transactionQuery,
+              [
+                customerIdToUpdate,
+                amount,
+                "credit",
+                `Payment for sale ${id}`,
+                notes || `Payment collected for sale ${id}`,
+              ],
+              (transErr) => {
+                if (transErr) {
+                  console.error(
+                    "Error creating transaction:",
+                    transErr.message
+                  );
+                  // Don't rollback for transaction error, just log it
+                }
+              }
+            );
+          }
+
+          // Commit the transaction
+          db.run("COMMIT", (commitErr) => {
+            if (commitErr) {
+              console.error("Error committing transaction:", commitErr.message);
+              return res.status(500).json({ error: commitErr.message });
+            }
+
+            // Get updated sale
+            db.get(
+              "SELECT * FROM sales WHERE id = ?",
+              [id],
+              (finalErr, updatedSale) => {
+                if (finalErr) {
+                  console.error(
+                    "Error fetching updated sale:",
+                    finalErr.message
+                  );
+                  // Still return success since payment was recorded
+                }
+
+                console.log(`✅ Payment processed successfully for sale ${id}`);
+
+                res.json({
+                  success: true,
+                  message: "Payment recorded successfully",
+                  saleId: id,
+                  amount: Number(amount),
+                  previousPaid: Number(sale.paid_amount || 0),
+                  newPaid: newPaidAmount,
+                  remainingDue: newDueAmount,
+                  paymentStatus: paymentStatus,
+                  updatedSale: updatedSale || null,
+                });
+              }
+            );
+          });
+        }
+      );
+    });
+  });
+});
+
 // Update sale payment
 router.put("/:id/payment", (req, res) => {
   const { id } = req.params;

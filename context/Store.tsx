@@ -366,12 +366,13 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // NEW: Delete sale function
+  // FIXED: Delete sale function with correct endpoint
   const deleteSale = async (saleId: string): Promise<boolean> => {
     try {
       console.log(`Attempting to delete sale with ID: ${saleId}`);
 
-      const response = await fetch(`${API_BASE}/sales/${saleId}`, {
+      // FIX: Use the correct endpoint that matches your backend
+      const response = await fetch(`${API_BASE}/sales/delete/${saleId}`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",

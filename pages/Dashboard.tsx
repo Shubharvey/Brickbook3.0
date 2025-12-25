@@ -25,46 +25,201 @@ import {
 import { Link } from "react-router-dom";
 
 const Dashboard: React.FC = () => {
-  const { sales, customers, products, deliveries, expenses } = useStore();
+  const { sales, customers, products, deliveries, expenses, isLoading, error } =
+    useStore();
 
-  const totalRevenue = sales.reduce((acc, sale) => acc + sale.totalAmount, 0);
-  const totalExpenses = expenses.reduce((acc, exp) => acc + exp.amount, 0);
-  const profit = totalRevenue - totalExpenses;
+  // Add loading state
+  const [isDashboardLoading, setIsDashboardLoading] = React.useState(true);
 
-  const pendingDeliveries = deliveries.filter(
-    (d) => d.status !== "Delivered"
-  ).length;
-  const lowStockItems = products.filter((p) => p.stock < 1000).length;
-  const totalDues = customers.reduce((acc, c) => acc + c.totalDues, 0);
+  // Add error state
+  const [dashboardError, setDashboardError] = React.useState<string | null>(
+    null
+  );
 
-  // Calculate Wallet (Sum of all customer wallets) - Mock logic based on store
-  const totalWallet = customers.reduce((acc, c) => acc + c.walletBalance, 0);
-  // Cash in Hand (Revenue - Expenses, simplified)
-  const cashInHand = profit > 0 ? profit : 0;
+  // Process data safely with error handling
+  const totalRevenue = React.useMemo(() => {
+    try {
+      return sales.reduce((acc, sale) => acc + (sale.totalAmount || 0), 0);
+    } catch (err) {
+      console.error("Error calculating totalRevenue:", err);
+      return 0;
+    }
+  }, [sales]);
 
-  const recentSales = sales.slice(0, 5);
+  const totalExpenses = React.useMemo(() => {
+    try {
+      return expenses.reduce((acc, exp) => acc + (exp.amount || 0), 0);
+    } catch (err) {
+      console.error("Error calculating totalExpenses:", err);
+      return 0;
+    }
+  }, [expenses]);
 
-  // Mock data for the chart
-  const data = [
-    { name: "Mon", sales: 4000 },
-    { name: "Tue", sales: 3000 },
-    { name: "Wed", sales: 2000 },
-    { name: "Thu", sales: 2780 },
-    { name: "Fri", sales: 1890 },
-    { name: "Sat", sales: 2390 },
-    { name: "Sun", sales: 3490 },
-  ];
+  const profit = React.useMemo(
+    () => totalRevenue - totalExpenses,
+    [totalRevenue, totalExpenses]
+  );
 
-  // Mobile Weekly Performance Data (Simplified)
-  const weeklyData = [
-    { day: "M", val: 40 },
-    { day: "T", val: 60 },
-    { day: "W", val: 30 },
-    { day: "T", val: 70 },
-    { day: "F", val: 50 },
-    { day: "S", val: 20 },
-    { day: "S", val: 80 },
-  ];
+  const pendingDeliveries = React.useMemo(() => {
+    try {
+      return deliveries.filter((d) => d?.status !== "Delivered").length;
+    } catch (err) {
+      console.error("Error calculating pendingDeliveries:", err);
+      return 0;
+    }
+  }, [deliveries]);
+
+  const lowStockItems = React.useMemo(() => {
+    try {
+      return products.filter((p) => (p?.stock || 0) < 1000).length;
+    } catch (err) {
+      console.error("Error calculating lowStockItems:", err);
+      return 0;
+    }
+  }, [products]);
+
+  const totalDues = React.useMemo(() => {
+    try {
+      return customers.reduce((acc, c) => acc + (c?.totalDues || 0), 0);
+    } catch (err) {
+      console.error("Error calculating totalDues:", err);
+      return 0;
+    }
+  }, [customers]);
+
+  const totalWallet = React.useMemo(() => {
+    try {
+      return customers.reduce((acc, c) => acc + (c?.walletBalance || 0), 0);
+    } catch (err) {
+      console.error("Error calculating totalWallet:", err);
+      return 0;
+    }
+  }, [customers]);
+
+  const cashInHand = React.useMemo(() => (profit > 0 ? profit : 0), [profit]);
+
+  const recentSales = React.useMemo(() => {
+    try {
+      return sales.slice(0, 5).filter((sale) => sale?.id && sale?.customerName);
+    } catch (err) {
+      console.error("Error processing recentSales:", err);
+      return [];
+    }
+  }, [sales]);
+
+  // Process sales data for chart with error handling
+  const processSalesData = React.useCallback(() => {
+    try {
+      console.log("Processing sales data for chart...", sales.length, "sales");
+
+      if (!sales || sales.length === 0) {
+        console.log("No sales data available, returning empty chart");
+        return [];
+      }
+
+      // Group sales by date
+      const salesByDate = sales.reduce((acc, sale) => {
+        if (!sale?.date) return acc;
+
+        const date = sale.date;
+        if (!acc[date]) {
+          acc[date] = 0;
+        }
+        acc[date] += sale.totalAmount || 0;
+        return acc;
+      }, {} as Record<string, number>);
+
+      console.log("Sales grouped by date:", salesByDate);
+
+      // Get the last 7 days of data
+      const dates = [];
+      const today = new Date();
+
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date(today);
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split("T")[0];
+        dates.push(dateStr);
+      }
+
+      // Create chart data with actual sales or 0 if no sales
+      const chartData = dates.map((date) => {
+        const dayName = new Date(date).toLocaleDateString("en-US", {
+          weekday: "short",
+        });
+        return {
+          name: dayName,
+          date: date,
+          sales: salesByDate[date] || 0,
+        };
+      });
+
+      console.log("Generated chart data:", chartData);
+      return chartData;
+    } catch (err) {
+      console.error("Error processing sales data:", err);
+      setDashboardError("Failed to process sales data");
+      return [];
+    }
+  }, [sales]);
+
+  // Get actual sales data for the chart
+  const chartData = React.useMemo(() => {
+    const data = processSalesData();
+    setIsDashboardLoading(false);
+    return data;
+  }, [processSalesData]);
+
+  // Mobile Weekly Performance Data
+  const weeklyData = React.useMemo(() => {
+    try {
+      return chartData.map((d) => ({
+        day: d.name?.charAt(0) || "N",
+        val:
+          d.sales > 0
+            ? Math.min(
+                100,
+                (d.sales /
+                  Math.max(...chartData.map((item) => item.sales || 1))) *
+                  100
+              )
+            : 0,
+      }));
+    } catch (err) {
+      console.error("Error processing weekly data:", err);
+      return [];
+    }
+  }, [chartData]);
+
+  // Show loading state
+  if (isDashboardLoading || isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-500 mx-auto mb-4"></div>
+          <p className="text-white">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error || dashboardError) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <p className="text-red-400 mb-4">Error loading dashboard</p>
+          <p className="text-slate-400 text-sm">{error || dashboardError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-4 px-4 py-2 bg-brand-500 text-white rounded-lg hover:bg-brand-600"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -101,7 +256,7 @@ const Dashboard: React.FC = () => {
             icon={Package}
             trend="2 items"
             trendUp={false}
-            color="orange" // This will map to brand color in StatCard
+            color="orange"
             description="Reorder needed"
           />
           <StatCard
@@ -122,50 +277,82 @@ const Dashboard: React.FC = () => {
                 Sales Overview
               </h2>
               <select className="bg-slate-800 border border-slate-700 text-slate-300 text-sm rounded-lg px-3 py-1 outline-none">
+                <option>Last 7 Days</option>
                 <option>This Week</option>
-                <option>Last Week</option>
                 <option>This Month</option>
               </select>
             </div>
-            <div className="h-72 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#334155"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="name"
-                    stroke="#94a3b8"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    stroke="#94a3b8"
-                    fontSize={12}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(value) => `₹${value}`}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#1e293b",
-                      borderColor: "#334155",
-                      color: "#f1f5f9",
-                    }}
-                    itemStyle={{ color: "#f1f5f9" }}
-                    cursor={{ fill: "#334155", opacity: 0.4 }}
-                  />
-                  <Bar dataKey="sales" radius={[4, 4, 0, 0]}>
-                    {data.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill="#97c5a7" />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+
+            {chartData.length > 0 ? (
+              <>
+                <div className="h-72 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="#334155"
+                        vertical={false}
+                      />
+                      <XAxis
+                        dataKey="name"
+                        stroke="#94a3b8"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="#94a3b8"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) =>
+                          value === 0 ? "₹0" : `₹${(value / 1000).toFixed(1)}k`
+                        }
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#1e293b",
+                          borderColor: "#334155",
+                          color: "#f1f5f9",
+                        }}
+                        itemStyle={{ color: "#f1f5f9" }}
+                        cursor={{ fill: "#334155", opacity: 0.4 }}
+                        formatter={(value: any) => [
+                          `₹${(value.sales || 0).toLocaleString()}`,
+                          value.date || "Unknown date",
+                        ]}
+                      />
+                      <Bar dataKey="sales" radius={[4, 4, 0, 0]}>
+                        {chartData.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={
+                              (entry?.sales || 0) > 0 ? "#97c5a7" : "#475569"
+                            }
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="mt-4 text-xs text-slate-500 text-center">
+                  {sales.length > 0
+                    ? `Showing data for ${
+                        chartData.filter((d) => (d?.sales || 0) > 0).length
+                      } days with sales`
+                    : "No sales data available for the selected period"}
+                </div>
+              </>
+            ) : (
+              <div className="h-72 w-full flex items-center justify-center">
+                <div className="text-center">
+                  <p className="text-slate-500 mb-2">No sales data available</p>
+                  <p className="text-xs text-slate-400">
+                    Add some sales to see the chart
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Recent Activity */}
@@ -186,29 +373,32 @@ const Dashboard: React.FC = () => {
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 font-bold text-xs">
-                        {sale.customerName.substring(0, 2).toUpperCase()}
+                        {(sale?.customerName || "Unknown")
+                          .substring(0, 2)
+                          .toUpperCase()}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-white">
-                          {sale.customerName}
+                          {sale?.customerName || "Unknown Customer"}
                         </p>
                         <p className="text-xs text-slate-500">
-                          {sale.items.length} items • {sale.date}
+                          {sale?.items?.length || 0} items •{" "}
+                          {sale?.date || "No date"}
                         </p>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-bold text-emerald-400">
-                        +₹{sale.totalAmount}
+                        +₹{(sale?.totalAmount || 0).toLocaleString()}
                       </p>
                       <span
                         className={`text-xs px-2 py-0.5 rounded-full ${
-                          sale.paymentStatus === "Paid"
+                          sale?.paymentStatus === "Paid"
                             ? "bg-emerald-500/10 text-emerald-400"
                             : "bg-brand-500/10 text-brand-500"
                         }`}
                       >
-                        {sale.paymentStatus}
+                        {sale?.paymentStatus || "Pending"}
                       </span>
                     </div>
                   </div>
@@ -227,7 +417,7 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* --- MOBILE VIEW (Matches Reference Image) --- */}
+      {/* --- MOBILE VIEW --- */}
       <div className="md:hidden pb-4 space-y-6">
         {/* Search Bar */}
         <div className="relative">
@@ -290,21 +480,30 @@ const Dashboard: React.FC = () => {
               Weekly Performance
             </h3>
             <div className="flex items-center gap-1 text-[10px] text-slate-500">
-              <div className="w-2 h-2 bg-red-500 rounded-sm"></div> Expenses
+              <div className="w-2 h-2 bg-red-500 rounded-sm"></div> Sales
             </div>
           </div>
           <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 h-32 flex items-end justify-between gap-2">
-            {weeklyData.map((d, i) => (
-              <div key={i} className="flex flex-col items-center gap-2 w-full">
-                <div className="w-2 bg-red-500/20 rounded-t-sm h-full relative group">
-                  <div
-                    className="absolute bottom-0 left-0 w-full bg-red-500 rounded-t-sm transition-all duration-500"
-                    style={{ height: `${d.val}%` }}
-                  ></div>
+            {weeklyData.length > 0 ? (
+              weeklyData.map((d, i) => (
+                <div
+                  key={i}
+                  className="flex flex-col items-center gap-2 w-full"
+                >
+                  <div className="w-2 bg-brand-500/20 rounded-t-sm h-full relative group">
+                    <div
+                      className="absolute bottom-0 left-0 w-full bg-brand-500 rounded-t-sm transition-all duration-500"
+                      style={{ height: `${d.val}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-[10px] text-slate-500">{d.day}</span>
                 </div>
-                <span className="text-[10px] text-slate-500">{d.day}</span>
+              ))
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-slate-500">
+                <p className="text-xs">No data available</p>
               </div>
-            ))}
+            )}
           </div>
         </div>
 

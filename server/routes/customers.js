@@ -31,4 +31,33 @@ router.put("/:id", customersController.updateCustomer);
 // Delete customer
 router.delete("/:id", customersController.deleteCustomer);
 
+// ============ NEW ROUTES FOR WALLET AND PAYMENTS ============
+// Add to wallet (Credit/Debit)
+router.post("/:id/wallet", customersController.addToWallet);
+
+// Get wallet transactions
+router.get(
+  "/:id/wallet/transactions",
+  customersController.getWalletTransactions
+);
+
+// Apply wallet to dues
+router.post("/:id/wallet/apply", customersController.applyWalletToDues);
+
+// NEW: Collect payment from customer
+router.post(
+  "/:id/collect-payment",
+  customersController.collectPaymentFromCustomer
+);
+
+// ============ OTHER UTILITY ROUTES ============
+// Get customers with dues only
+router.get("/with-dues", customersController.getCustomersWithDues);
+
+// Get customers with wallet balance only
+router.get("/with-wallet", customersController.getCustomersWithWallet);
+
+// Fix negative wallet balances
+router.post("/fix-wallets", customersController.fixWalletBalances);
+
 module.exports = router;

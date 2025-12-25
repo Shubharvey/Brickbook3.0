@@ -23,6 +23,13 @@ import {
   DeliveryStatus,
 } from "../types";
 
+// Define PaymentStatus values locally if they're not available as values from the types file
+const PaymentStatusValues = {
+  PENDING: "PENDING" as PaymentStatus,
+  PARTIAL: "PARTIAL" as PaymentStatus,
+  PAID: "PAID" as PaymentStatus,
+};
+
 interface AccountsContextType {
   // Existing properties
   locations: Location[];
@@ -220,10 +227,10 @@ export const AccountsProvider: React.FC<{ children: ReactNode }> = ({
           paidAmount: sale.paid_amount,
           paymentStatus:
             sale.balance_due === 0
-              ? PaymentStatus.PAID
+              ? PaymentStatusValues.PAID
               : sale.paid_amount > 0
-              ? PaymentStatus.PARTIAL
-              : PaymentStatus.PENDING,
+              ? PaymentStatusValues.PARTIAL
+              : PaymentStatusValues.PENDING,
           deliveryStatus: DeliveryStatus.PENDING, // You can map this from your database
         }))
       );
@@ -620,7 +627,6 @@ export const AccountsProvider: React.FC<{ children: ReactNode }> = ({
         }),
       });
 
-      const newCustomer = await response.json();
       await refreshCustomers();
       await refreshDashboard();
     } catch (error) {
@@ -665,9 +671,9 @@ export const AccountsProvider: React.FC<{ children: ReactNode }> = ({
         total_amount: saleData.totalAmount,
         paid_amount: saleData.paidAmount,
         payment_type:
-          saleData.paymentStatus === PaymentStatus.PAID
+          saleData.paymentStatus === PaymentStatusValues.PAID
             ? "cash"
-            : saleData.paymentStatus === PaymentStatus.PARTIAL
+            : saleData.paymentStatus === PaymentStatusValues.PARTIAL
             ? "partial"
             : "credit",
         notes: `Sale to ${saleData.customerName}`,

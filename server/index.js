@@ -35,9 +35,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
+// Export the db instance for other modules
+module.exports.db = db;
+
 function initializeDatabase() {
   db.serialize(() => {
-    // 1. Customers Table
+    // 1. Customers Table (Already exists, ensures wallet_balance and outstanding_balance are there)
     db.run(`CREATE TABLE IF NOT EXISTS customers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -92,6 +95,18 @@ function initializeDatabase() {
       FOREIGN KEY (sale_id) REFERENCES sales (id)
     )`);
 
+    // NEW: 4. Transactions Table for customer wallet and payments
+    db.run(`CREATE TABLE IF NOT EXISTS transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER NOT NULL,
+      amount DECIMAL(15,2) NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('credit', 'debit', 'payment', 'dues_applied')),
+      description TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (customer_id) REFERENCES customers (id)
+    )`);
+
     console.log("DATABASE: Schema initialized successfully.");
   });
 }
@@ -102,7 +117,7 @@ function initializeDatabase() {
 const customersRouter = require("./routes/customers");
 const salesRouter = require("./routes/sales");
 
-// USE ROUTE FILES
+// Use the correct db instance for routes
 app.use("/api/customers", customersRouter); // Use the customers.js route file
 app.use("/api/sales", salesRouter); // Use the sales.js route file
 
@@ -139,6 +154,8 @@ app.listen(PORT, () => {
   console.log(`   GET  /api/health`);
   console.log(`   GET  /api/customers`);
   console.log(`   POST /api/customers`);
+  console.log(`   GET  /api/customers/:id/wallet (POST, GET)`);
+  console.log(`   POST /api/customers/:id/collect-payment`);
   console.log(`   GET  /api/sales`);
   console.log(`   POST /api/sales`);
   console.log(`   GET  /api/sales/all (test only)`);

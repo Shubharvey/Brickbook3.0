@@ -23,6 +23,9 @@ import {
   ArrowUpRight,
   CheckCircle,
   XCircle,
+  Plus,
+  Save,
+  Loader,
 } from "lucide-react";
 
 const CustomerProfile: React.FC = () => {
@@ -34,51 +37,23 @@ const CustomerProfile: React.FC = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCollectPaymentOpen, setIsCollectPaymentOpen] = useState(false);
+  const [isAddWalletOpen, setIsAddWalletOpen] = useState(false); // NEW: Wallet modal state
   const [selectedSaleForPayment, setSelectedSaleForPayment] = useState<
     string | null
   >(null);
   const [paymentAmount, setPaymentAmount] = useState<number | "">("");
+  const [walletAmount, setWalletAmount] = useState<number | "">(""); // NEW: Wallet amount
+  const [walletNotes, setWalletNotes] = useState<string>(""); // NEW: Wallet notes
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false); // NEW: Payment loading
+  const [isProcessingWallet, setIsProcessingWallet] = useState(false); // NEW: Wallet loading
   const [deleteSuccess, setDeleteSuccess] = useState<boolean | null>(null);
+  const [paymentSuccess, setPaymentSuccess] = useState<boolean | null>(null); // NEW: Payment success
+  const [walletSuccess, setWalletSuccess] = useState<boolean | null>(null); // NEW: Wallet success
   const menuRef = useRef<HTMLDivElement>(null);
 
   // --- Data Retrieval & Calculation ---
   const customer = customers.find((c) => c.id === id);
-
-  // --- Calculate wallet balance based on payment types ---
-  const calculateWalletBalance = (customerId: string) => {
-    const customerSales = sales.filter((s) => s.customerId === customerId);
-
-    // Calculate advance payments (full advance + advance portions)
-    let totalAdvance = 0;
-    let totalAdvanceUsed = 0;
-
-    customerSales.forEach((sale) => {
-      switch (sale.paymentType) {
-        case "full advance":
-          // Full amount paid as advance
-          totalAdvance += sale.totalAmount;
-          break;
-        case "advance + cash":
-          // Portion paid as advance (assuming 50% for now, you may need to adjust)
-          totalAdvance += Math.floor(sale.totalAmount * 0.5);
-          totalAdvanceUsed += Math.floor(sale.totalAmount * 0.5);
-          break;
-        case "cash":
-        case "credit":
-        case "dues + cash":
-          // No advance involved or advance not applicable
-          break;
-      }
-    });
-
-    // Net wallet balance = total advance paid - advance used
-    const netBalance = totalAdvance - totalAdvanceUsed;
-
-    // According to your logic: wallet balance should never be negative
-    // If customer has no advance, show 0, never show negative
-    return netBalance > 0 ? netBalance : 0;
-  };
 
   const customerStats = useMemo(() => {
     if (!customer) return null;
@@ -104,8 +79,8 @@ const CustomerProfile: React.FC = () => {
     const totalPaid = customerSales.reduce((acc, s) => acc + s.paidAmount, 0);
     const totalDue = totalSalesVal - totalPaid;
 
-    // Calculate wallet balance using the new logic
-    const calculatedWalletBalance = calculateWalletBalance(customer.id);
+    // Use ACTUAL wallet balance from database, not calculated
+    const actualWalletBalance = customer.walletBalance || 0;
 
     return {
       totalSales: totalSalesVal,
@@ -116,7 +91,7 @@ const CustomerProfile: React.FC = () => {
       totalOrders: customerSales.length,
       totalPaid,
       totalDue,
-      walletBalance: calculatedWalletBalance, // Use calculated wallet balance
+      walletBalance: actualWalletBalance, // Use ACTUAL database wallet balance
     };
   }, [customer, sales, deliveries]);
 
@@ -134,7 +109,7 @@ const CustomerProfile: React.FC = () => {
     };
   }, []);
 
-  // Reset success message after 3 seconds
+  // Reset success messages after 3 seconds
   useEffect(() => {
     if (deleteSuccess !== null) {
       const timer = setTimeout(() => {
@@ -143,6 +118,24 @@ const CustomerProfile: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [deleteSuccess]);
+
+  useEffect(() => {
+    if (paymentSuccess !== null) {
+      const timer = setTimeout(() => {
+        setPaymentSuccess(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [paymentSuccess]);
+
+  useEffect(() => {
+    if (walletSuccess !== null) {
+      const timer = setTimeout(() => {
+        setWalletSuccess(null);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [walletSuccess]);
 
   // --- Handlers ---
   const handleCall = () => {
@@ -175,14 +168,163 @@ const CustomerProfile: React.FC = () => {
     setIsCollectPaymentOpen(true);
   };
 
-  const handleSubmitPayment = () => {
-    console.log("Collecting payment:", {
-      saleId: selectedSaleForPayment,
-      amount: paymentAmount,
-    });
-    setIsCollectPaymentOpen(false);
-    setSelectedSaleForPayment(null);
-    setPaymentAmount("");
+  // --- FIXED: Handle payment submission with fallback API endpoints ---
+  const handleSubmitPayment = async () => {
+    if (!paymentAmount || paymentAmount <= 0) {
+      alert("Please enter a valid payment amount");
+      return;
+    }
+
+    setIsProcessingPayment(true);
+    setPaymentSuccess(null);
+
+    try {
+      const API_BASE = "http://localhost:3001/api";
+
+      // Determine if this is a general payment or linked to a sale
+      if (selectedSaleForPayment) {
+        // Update specific sale payment
+        const response = await fetch(
+          `${API_BASE}/sales/${selectedSaleForPayment}/payment`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount: paymentAmount,
+              customerId: customer?.id,
+              notes: `Payment collected for sale ${selectedSaleForPayment}`,
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to process payment");
+        }
+
+        await refreshCustomers();
+        setPaymentSuccess(true);
+        console.log(
+          "Payment collected successfully for sale:",
+          selectedSaleForPayment
+        );
+      } else {
+        // General payment to customer account (adds to wallet)
+        // Try wallet endpoint first
+        let response = await fetch(
+          `${API_BASE}/customers/${customer?.id}/wallet`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              amount: paymentAmount,
+              type: "credit",
+              description: "Payment collected on account",
+              notes: "General payment received",
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          // If wallet endpoint doesn't work, try creating a transaction
+          response = await fetch(`${API_BASE}/transactions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              customerId: customer?.id,
+              amount: paymentAmount,
+              type: "payment_received",
+              description: "Payment collected on account",
+              date: new Date().toISOString().split("T")[0],
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to record payment");
+          }
+        }
+
+        await refreshCustomers();
+        setPaymentSuccess(true);
+        console.log("General payment added to wallet successfully");
+      }
+
+      // Close modal and reset
+      setIsCollectPaymentOpen(false);
+      setSelectedSaleForPayment(null);
+      setPaymentAmount("");
+    } catch (error) {
+      console.error("Error collecting payment:", error);
+      setPaymentSuccess(false);
+      alert("Failed to process payment. Please try again.");
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  // --- FIXED: Handle adding to wallet with fallback API endpoints ---
+  const handleAddToWallet = async () => {
+    if (!walletAmount || walletAmount <= 0) {
+      alert("Please enter a valid amount");
+      return;
+    }
+
+    setIsProcessingWallet(true);
+    setWalletSuccess(null);
+
+    try {
+      const API_BASE = "http://localhost:3001/api";
+
+      // First, check if wallet endpoint exists
+      const response = await fetch(
+        `${API_BASE}/customers/${customer?.id}/wallet`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: walletAmount,
+            type: "credit",
+            description: walletNotes || "Manual wallet top-up",
+            notes: walletNotes || "Added to wallet balance",
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        // If endpoint doesn't exist, try an alternative approach
+        // Create a special transaction record
+        const transactionResponse = await fetch(`${API_BASE}/transactions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            customerId: customer?.id,
+            amount: walletAmount,
+            type: "wallet_credit",
+            description: walletNotes || "Manual wallet top-up",
+            date: new Date().toISOString().split("T")[0],
+          }),
+        });
+
+        if (!transactionResponse.ok) {
+          throw new Error("Failed to record wallet transaction");
+        }
+      }
+
+      await refreshCustomers();
+      setWalletSuccess(true);
+
+      // Close modal and reset
+      setIsAddWalletOpen(false);
+      setWalletAmount("");
+      setWalletNotes("");
+
+      console.log("Wallet balance updated successfully");
+    } catch (error) {
+      console.error("Error adding to wallet:", error);
+      setWalletSuccess(false);
+      alert("Failed to add to wallet. Please try again.");
+    } finally {
+      setIsProcessingWallet(false);
+    }
   };
 
   const handleDeleteSale = async (saleId: string) => {
@@ -219,7 +361,7 @@ const CustomerProfile: React.FC = () => {
     } catch (error) {
       console.error("Error deleting sale:", error);
       setDeleteSuccess(false);
-      alert("An error occurred while deleting the sale.");
+      alert("An error occurred while deleting sale.");
     } finally {
       setIsDeleting(null);
     }
@@ -298,6 +440,68 @@ const CustomerProfile: React.FC = () => {
               <p className="text-xs opacity-80 mt-0.5">
                 {deleteSuccess
                   ? "Wallet balance has been adjusted accordingly."
+                  : "Please try again or check server logs."}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Success Notification */}
+      {paymentSuccess !== null && (
+        <div
+          className={`fixed top-4 right-4 z-50 p-4 rounded-xl border shadow-2xl animate-in slide-in-from-right-4 fade-in duration-300 ${
+            paymentSuccess
+              ? "bg-emerald-950/90 border-emerald-800 text-emerald-400"
+              : "bg-rose-950/90 border-rose-800 text-rose-400"
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            {paymentSuccess ? (
+              <CheckCircle size={20} className="text-emerald-400" />
+            ) : (
+              <XCircle size={20} className="text-rose-400" />
+            )}
+            <div>
+              <p className="font-bold text-sm">
+                {paymentSuccess
+                  ? "Payment Collected Successfully"
+                  : "Payment Failed"}
+              </p>
+              <p className="text-xs opacity-80 mt-0.5">
+                {paymentSuccess
+                  ? "Customer wallet and dues updated."
+                  : "Please try again or check server logs."}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Success Notification */}
+      {walletSuccess !== null && (
+        <div
+          className={`fixed top-4 right-4 z-50 p-4 rounded-xl border shadow-2xl animate-in slide-in-from-right-4 fade-in duration-300 ${
+            walletSuccess
+              ? "bg-emerald-950/90 border-emerald-800 text-emerald-400"
+              : "bg-rose-950/90 border-rose-800 text-rose-400"
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            {walletSuccess ? (
+              <CheckCircle size={20} className="text-emerald-400" />
+            ) : (
+              <XCircle size={20} className="text-rose-400" />
+            )}
+            <div>
+              <p className="font-bold text-sm">
+                {walletSuccess
+                  ? "Wallet Updated Successfully"
+                  : "Wallet Update Failed"}
+              </p>
+              <p className="text-xs opacity-80 mt-0.5">
+                {walletSuccess
+                  ? "Wallet balance has been updated."
                   : "Please try again or check server logs."}
               </p>
             </div>
@@ -412,6 +616,13 @@ const CustomerProfile: React.FC = () => {
               >
                 <IndianRupee size={16} />
                 <span className="text-[10px] font-medium">Pay</span>
+              </button>
+              <button
+                onClick={() => setIsAddWalletOpen(true)}
+                className="flex-1 flex flex-col items-center justify-center py-2 rounded-xl bg-emerald-600 text-white font-bold shadow-lg shadow-emerald-500/20 active:bg-emerald-700 active:scale-95 transition-all gap-1"
+              >
+                <Plus size={16} />
+                <span className="text-[10px] font-medium">Wallet</span>
               </button>
             </div>
           </div>
@@ -781,16 +992,20 @@ const CustomerProfile: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setIsCollectPaymentOpen(true)}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 text-white text-sm font-bold hover:shadow-lg hover:shadow-brand-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
-                >
-                  <IndianRupee size={16} /> Collect Payment
-                  <ArrowUpRight
-                    size={14}
-                    className="opacity-50 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform"
-                  />
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setIsCollectPaymentOpen(true)}
+                    className="py-3 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 text-white text-sm font-bold hover:shadow-lg hover:shadow-brand-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
+                  >
+                    <IndianRupee size={16} /> Pay
+                  </button>
+                  <button
+                    onClick={() => setIsAddWalletOpen(true)}
+                    className="py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 text-white text-sm font-bold hover:shadow-lg hover:shadow-emerald-500/25 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
+                  >
+                    <Plus size={16} /> Wallet
+                  </button>
+                </div>
               </div>
               {/* Background decoration */}
               <div className="absolute -bottom-10 -right-10 w-24 h-24 bg-brand-500/10 rounded-full blur-3xl"></div>
@@ -861,12 +1076,18 @@ const CustomerProfile: React.FC = () => {
 
                     <div className="bg-slate-950/50 border border-slate-800/60 rounded-2xl p-5 relative group overflow-hidden hover:border-slate-700 transition-colors">
                       <div className="relative z-10">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                           Wallet Balance
                         </p>
                         <p className="text-2xl font-bold text-emerald-400">
                           ₹{customerStats.walletBalance.toLocaleString()}
                         </p>
+                        <button
+                          onClick={() => setIsAddWalletOpen(true)}
+                          className="mt-2 px-3 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 text-[10px] font-medium border border-emerald-500/20 hover:bg-emerald-500 hover:text-white transition-colors"
+                        >
+                          Add Balance
+                        </button>
                       </div>
                       <Wallet
                         className="absolute right-4 bottom-4 text-emerald-500/20 group-hover:text-emerald-500/30 transition-colors"
@@ -876,7 +1097,7 @@ const CustomerProfile: React.FC = () => {
 
                     <div className="bg-slate-950/50 border border-slate-800/60 rounded-2xl p-5 relative group overflow-hidden hover:border-slate-700 transition-colors">
                       <div className="relative z-10">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
                           Last Active
                         </p>
                         <p className="text-lg font-bold text-white">
@@ -1276,9 +1497,95 @@ const CustomerProfile: React.FC = () => {
               </button>
               <button
                 onClick={handleSubmitPayment}
-                className="flex-[2] py-2.5 rounded-xl bg-brand-600 text-white font-bold hover:bg-brand-500 transition-colors shadow-lg shadow-brand-500/25 text-xs"
+                disabled={isProcessingPayment}
+                className="flex-[2] py-2.5 rounded-xl bg-brand-600 text-white font-bold hover:bg-brand-500 transition-colors shadow-lg shadow-brand-500/25 text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                Confirm Payment
+                {isProcessingPayment ? (
+                  <>
+                    <Loader size={14} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Confirm Payment"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- NEW: Add to Wallet Modal --- */}
+      {isAddWalletOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300"
+            onClick={() => setIsAddWalletOpen(false)}
+          ></div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95 slide-in-from-bottom-4 duration-300 relative z-10">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+                  <Wallet size={16} />
+                </div>
+                Add to Wallet
+              </h3>
+              <button
+                onClick={() => setIsAddWalletOpen(false)}
+                className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+              >
+                <ArrowLeft size={14} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Amount to Add
+                </label>
+                <div className="relative group">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-base">
+                    ₹
+                  </span>
+                  <input
+                    type="number"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-7 pr-3 py-2.5 text-white text-base font-bold outline-none focus:border-emerald-500"
+                    placeholder="0.00"
+                    value={walletAmount}
+                    onChange={(e) => setWalletAmount(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Notes (Optional)
+                </label>
+                <textarea
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-white text-xs outline-none focus:border-emerald-500 resize-none h-20"
+                  placeholder="Enter notes for this transaction..."
+                  value={walletNotes}
+                  onChange={(e) => setWalletNotes(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="p-5 pt-0 flex gap-3">
+              <button
+                onClick={() => setIsAddWalletOpen(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 transition-colors font-semibold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddToWallet}
+                disabled={isProcessingWallet}
+                className="flex-[2] py-2.5 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-500/25 text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isProcessingWallet ? (
+                  <>
+                    <Loader size={14} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  "Add to Wallet"
+                )}
               </button>
             </div>
           </div>

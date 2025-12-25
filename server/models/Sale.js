@@ -1,8 +1,5 @@
-const sqlite3 = require("sqlite3").verbose();
-const path = require("path");
-
-const dbPath = path.resolve(__dirname, "../brickbook.db");
-const db = new sqlite3.Database(dbPath);
+// Use the centralized database instance
+const { db } = require("../index");
 
 class Sale {
   static createSale(saleData, callback) {
@@ -340,6 +337,7 @@ class Sale {
                         if (fixErr)
                           console.error("Error fixing wallet:", fixErr);
                       }
+                      // Note: No ROLLBACK/COMMIT here as it's a separate fix to ensure integrity
                     );
                   }
                 }
