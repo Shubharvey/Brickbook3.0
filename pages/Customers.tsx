@@ -14,6 +14,8 @@ import {
   Briefcase,
   Wallet,
   RefreshCw,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import Dropdown from "../components/Dropdown";
 import { Customer } from "../types";
@@ -33,8 +35,14 @@ interface SortConfig {
 }
 
 const Customers: React.FC = () => {
-  const { customers, sales, deliveries, addCustomer, refreshCustomers } =
-    useStore();
+  const {
+    customers,
+    sales,
+    deliveries,
+    addCustomer,
+    refreshCustomers,
+    deleteCustomer,
+  } = useStore();
   const navigate = useNavigate();
 
   // --- State ---
@@ -57,6 +65,13 @@ const Customers: React.FC = () => {
     type: "Individual",
   });
 
+  // --- Delete Customer State ---
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(
+    null
+  );
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // --- Sort State ---
   const [sortConfig, setSortConfig] = useState<SortConfig>({
     key: "lastActive",
@@ -76,39 +91,32 @@ const Customers: React.FC = () => {
     }
   };
 
-  // --- Calculate wallet balance based on payment types ---
-  const calculateWalletBalance = (customerId: string) => {
-    const customerSales = sales.filter((s) => s.customerId === customerId);
+  // --- Delete customer function ---
+  const handleDeleteCustomer = async () => {
+    if (!customerToDelete) return;
 
-    // Calculate advance payments (full advance + advance portions)
-    let totalAdvance = 0;
-    let totalAdvanceUsed = 0;
+    setIsDeleting(true);
+    try {
+      await deleteCustomer(customerToDelete.id);
+      console.log(`Customer ${customerToDelete.name} deleted`);
+      setIsDeleteModalOpen(false);
+      setCustomerToDelete(null);
 
-    customerSales.forEach((sale) => {
-      switch (sale.paymentType) {
-        case "full advance":
-          // Full amount paid as advance
-          totalAdvance += sale.totalAmount;
-          break;
-        case "advance + cash":
-          // Portion paid as advance (assuming 50% for now, you may need to adjust)
-          totalAdvance += Math.floor(sale.totalAmount * 0.5);
-          totalAdvanceUsed += Math.floor(sale.totalAmount * 0.5);
-          break;
-        case "cash":
-        case "credit":
-        case "dues + cash":
-          // No advance involved or advance not applicable
-          break;
-      }
-    });
+      // Refresh the customer list
+      await handleManualRefresh();
+    } catch (error) {
+      console.error("Error deleting customer:", error);
+      alert("Failed to delete customer. Please try again.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
-    // Net wallet balance = total advance paid - advance used
-    const netBalance = totalAdvance - totalAdvanceUsed;
-
-    // According to your logic: wallet balance should never be negative
-    // If customer has no advance, show 0, never show negative
-    return netBalance > 0 ? netBalance : 0;
+  // --- Open delete confirmation modal ---
+  const openDeleteModal = (customer: Customer, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent navigation to customer details
+    setCustomerToDelete(customer);
+    setIsDeleteModalOpen(true);
   };
 
   // --- Derived Data & Metrics ---
@@ -129,11 +137,8 @@ const Customers: React.FC = () => {
       );
       const isRegular = customerSales.length >= 4;
 
-      // Calculate wallet balance using the new logic
-      const calculatedWalletBalance = calculateWalletBalance(c.id);
-
       console.log(
-        `Customer: ${c.name}, Dues: ${c.totalDues}, Original Wallet: ${c.walletBalance}, Calculated Wallet: ${calculatedWalletBalance}, Sales: ${customerSales.length}`
+        `Customer: ${c.name}, Dues: ${c.totalDues}, Wallet: ${c.walletBalance}, Sales: ${customerSales.length}`
       );
 
       return {
@@ -142,7 +147,7 @@ const Customers: React.FC = () => {
         isActive: hasPendingDeliveries,
         isRegular,
         salesCount: customerSales.length,
-        walletBalance: calculatedWalletBalance, // Use the calculated wallet balance
+        walletBalance: c.walletBalance || 0, // USE DATABASE VALUE ONLY
       };
     });
 
@@ -151,6 +156,13 @@ const Customers: React.FC = () => {
     console.log(`${customersWithDues.length} customers have dues:`);
     customersWithDues.forEach((c) => {
       console.log(`  - ${c.name}: ₹${c.totalDues}`);
+    });
+
+    // Log customers with wallet balance
+    const customersWithWallet = enhanced.filter((c) => c.walletBalance > 0);
+    console.log(`${customersWithWallet.length} customers have wallet balance:`);
+    customersWithWallet.forEach((c) => {
+      console.log(`  - ${c.name}: ₹${c.walletBalance} in wallet`);
     });
 
     return enhanced;
@@ -162,6 +174,10 @@ const Customers: React.FC = () => {
     regular: enhancedCustomers.filter((c) => c.isRegular).length,
     withDues: enhancedCustomers.filter((c) => c.totalDues > 0).length,
     totalDues: enhancedCustomers.reduce((sum, c) => sum + c.totalDues, 0),
+    totalWallet: enhancedCustomers.reduce(
+      (sum, c) => sum + (c.walletBalance || 0),
+      0
+    ),
   };
 
   const filteredCustomers = useMemo(() => {
@@ -246,6 +262,84 @@ const Customers: React.FC = () => {
 
   return (
     <div className="pb-24 md:pb-0 space-y-8">
+      {/* --- Delete Confirmation Modal --- */}
+      {isDeleteModalOpen && customerToDelete && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-red-800 rounded-2xl max-w-md w-full p-6 animate-in fade-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="bg-red-500/20 p-2 rounded-lg">
+                <AlertTriangle className="text-red-500" size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">
+                  Delete Customer
+                </h3>
+                <p className="text-sm text-slate-400">
+                  This action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            <div className="mb-6 p-4 bg-slate-800/50 rounded-xl">
+              <p className="text-slate-300 mb-2">
+                Are you sure you want to delete{" "}
+                <span className="font-bold text-white">
+                  {customerToDelete.name}
+                </span>
+                ?
+              </p>
+              <div className="text-sm text-slate-500 space-y-1">
+                <p>• Phone: {customerToDelete.phone}</p>
+                <p>• Type: {customerToDelete.type}</p>
+                {customerToDelete.totalDues > 0 && (
+                  <p className="text-red-400">
+                    ⚠️ This customer has ₹
+                    {customerToDelete.totalDues.toLocaleString()} in dues
+                  </p>
+                )}
+                {customerToDelete.walletBalance > 0 && (
+                  <p className="text-emerald-400">
+                    ⚠️ This customer has ₹
+                    {customerToDelete.walletBalance.toLocaleString()} wallet
+                    balance
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setCustomerToDelete(null);
+                }}
+                disabled={isDeleting}
+                className="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteCustomer}
+                disabled={isDeleting}
+                className="flex-1 py-3 px-4 bg-red-500 hover:bg-red-600 text-white rounded-xl font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} />
+                    Delete Customer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- Header & Actions --- */}
       <div className="relative z-10">
         <div className="flex items-center justify-between gap-4">
@@ -331,10 +425,7 @@ const Customers: React.FC = () => {
           <div className="text-xs text-slate-500">
             • Wallet Balance:{" "}
             <span className="text-emerald-400 font-bold">
-              ₹
-              {enhancedCustomers
-                .reduce((sum, c) => sum + c.walletBalance, 0)
-                .toLocaleString()}
+              ₹{metrics.totalWallet.toLocaleString()}
             </span>
           </div>
         </div>
@@ -561,7 +652,7 @@ const Customers: React.FC = () => {
           {/* Desktop Header Row */}
           <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 border-b border-slate-800 bg-slate-900/30 text-xs font-bold text-slate-500 uppercase tracking-wider">
             <div
-              className="col-span-4 cursor-pointer hover:text-brand-500 flex items-center gap-1"
+              className="col-span-3 cursor-pointer hover:text-brand-500 flex items-center gap-1"
               onClick={() => handleSort("name")}
             >
               Name{" "}
@@ -606,15 +697,19 @@ const Customers: React.FC = () => {
             >
               Last Order
             </div>
+            <div className="col-span-1 text-right">Actions</div>
           </div>
 
           <div className="space-y-3 md:space-y-1 mt-2">
             {sortedCustomers.length > 0 ? (
               sortedCustomers.map((c) => (
-                <div key={c.id} onClick={() => navigate(`/customers/${c.id}`)}>
+                <div key={c.id}>
                   {/* Desktop Row */}
-                  <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-4 items-center border-b border-slate-800/50 hover:bg-slate-900/40 transition-all cursor-pointer group rounded-xl">
-                    <div className="col-span-4">
+                  <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-4 items-center border-b border-slate-800/50 hover:bg-slate-900/40 transition-all rounded-xl">
+                    <div
+                      className="col-span-3 cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
                       <p className="font-bold text-white text-sm group-hover:text-brand-500 transition-colors truncate">
                         {c.name}
                       </p>
@@ -622,7 +717,10 @@ const Customers: React.FC = () => {
                         <Phone size={10} /> {c.phone}
                       </p>
                     </div>
-                    <div className="col-span-2">
+                    <div
+                      className="col-span-2 cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
                       <p className="text-sm text-slate-300 font-mono">
                         ₹{c.totalSalesAmount.toLocaleString()}
                       </p>
@@ -630,7 +728,10 @@ const Customers: React.FC = () => {
                         ({c.salesCount || 0} sales)
                       </p>
                     </div>
-                    <div className="col-span-2 text-right">
+                    <div
+                      className="col-span-2 text-right cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
                       <p
                         className={`text-sm font-bold font-mono ${
                           c.totalDues > 0 ? "text-red-400" : "text-slate-500"
@@ -644,7 +745,10 @@ const Customers: React.FC = () => {
                         <p className="text-[10px] text-red-400/70">Due</p>
                       )}
                     </div>
-                    <div className="col-span-2 text-right">
+                    <div
+                      className="col-span-2 text-right cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
                       <p
                         className={`text-sm font-bold font-mono ${
                           c.walletBalance > 0
@@ -657,15 +761,30 @@ const Customers: React.FC = () => {
                           : "-"}
                       </p>
                     </div>
-                    <div className="col-span-2 text-right">
+                    <div
+                      className="col-span-2 text-right cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
                       <p className="text-xs text-slate-400">{c.lastActive}</p>
+                    </div>
+                    <div className="col-span-1 text-right">
+                      <button
+                        onClick={(e) => openDeleteModal(c, e)}
+                        className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                        title="Delete customer"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </div>
 
                   {/* Mobile Card */}
                   <div className="md:hidden bg-slate-900/50 border border-slate-800 rounded-2xl p-4 active:bg-slate-900 active:scale-98 transition-all">
                     <div className="flex justify-between items-start mb-3">
-                      <div>
+                      <div
+                        className="flex-1 cursor-pointer"
+                        onClick={() => navigate(`/customers/${c.id}`)}
+                      >
                         <p className="font-bold text-white text-base">
                           {c.name}
                         </p>
@@ -673,47 +792,61 @@ const Customers: React.FC = () => {
                           <Phone size={10} /> {c.phone}
                         </p>
                       </div>
-                      <div className="text-right">
-                        {c.walletBalance > 0 ? (
-                          <div className="flex items-center gap-1 text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg">
-                            <Wallet size={12} />
-                            <span className="text-xs font-bold">
-                              ₹{c.walletBalance.toLocaleString()}
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          {c.walletBalance > 0 ? (
+                            <div className="flex items-center gap-1 text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg">
+                              <Wallet size={12} />
+                              <span className="text-xs font-bold">
+                                ₹{c.walletBalance.toLocaleString()}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-600">
+                              No Advance
                             </span>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-600">
-                            No Advance
-                          </span>
-                        )}
+                          )}
+                        </div>
+                        <button
+                          onClick={(e) => openDeleteModal(c, e)}
+                          className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                          title="Delete customer"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex justify-between items-center pt-3 border-t border-slate-800">
-                      <div className="flex flex-col">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-500 uppercase tracking-wider">
-                            Dues
-                          </span>
-                          <span
-                            className={`text-sm font-bold font-mono ${
-                              c.totalDues > 0
-                                ? "text-red-400"
-                                : "text-slate-400"
-                            }`}
-                          >
-                            {c.totalDues > 0
-                              ? `₹${c.totalDues.toLocaleString()}`
-                              : "Clear"}
-                          </span>
+                    <div
+                      className="cursor-pointer"
+                      onClick={() => navigate(`/customers/${c.id}`)}
+                    >
+                      <div className="flex justify-between items-center pt-3 border-t border-slate-800">
+                        <div className="flex flex-col">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 uppercase tracking-wider">
+                              Dues
+                            </span>
+                            <span
+                              className={`text-sm font-bold font-mono ${
+                                c.totalDues > 0
+                                  ? "text-red-400"
+                                  : "text-slate-400"
+                              }`}
+                            >
+                              {c.totalDues > 0
+                                ? `₹${c.totalDues.toLocaleString()}`
+                                : "Clear"}
+                            </span>
+                          </div>
+                          {c.totalDues > 0 && (
+                            <span className="text-[10px] text-red-400/70 mt-1">
+                              Outstanding Balance
+                            </span>
+                          )}
                         </div>
-                        {c.totalDues > 0 && (
-                          <span className="text-[10px] text-red-400/70 mt-1">
-                            Outstanding Balance
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        Last: {c.lastActive}
+                        <div className="text-[10px] text-slate-500">
+                          Last: {c.lastActive}
+                        </div>
                       </div>
                     </div>
                   </div>

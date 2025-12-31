@@ -27,6 +27,7 @@ interface StoreContextType {
   addCustomer: (customer: Customer) => Promise<Customer>;
   addExpense: (expense: Expense) => Promise<void>;
   deleteSale: (saleId: string) => Promise<boolean>;
+  deleteCustomer: (customerId: string) => Promise<boolean>;
   updateDeliveryStatus: (id: string, status: DeliveryStatus) => void;
   refreshCustomers: () => Promise<void>;
   refreshExpenses: () => Promise<void>;
@@ -69,30 +70,19 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         const customersData = await customersResponse.json();
         console.log("Raw customers data from API:", customersData);
 
-        // CRITICAL FIX: Correctly transform backend data
-        const transformedCustomers = customersData.map((customer: any) => {
-          // The backend sends fields from database: wallet_balance, outstanding_balance
-          // But we need to map them to frontend fields: walletBalance, totalDues
-          const transformed = {
-            id: customer.id.toString(),
-            name: customer.name || "Unknown",
-            phone: customer.phone || "",
-            address: customer.address || "",
-            type: customer.type || "Regular",
-            // FIX: Map database fields to frontend fields
-            walletBalance:
-              customer.walletBalance || customer.wallet_balance || 0,
-            totalDues: customer.totalDues || customer.outstanding_balance || 0,
-            lastActive:
-              customer.lastActive?.split("T")[0] ||
-              customer.created_at?.split("T")[0] ||
-              new Date().toISOString().split("T")[0],
-          };
-          console.log(
-            `Customer ${transformed.name}: Dues=${transformed.totalDues}, Wallet=${transformed.walletBalance}`
-          );
-          return transformed;
-        });
+        // Transform backend data
+        const transformedCustomers = customersData.map((customer: any) => ({
+          id: customer.id.toString(),
+          name: customer.name || "Unknown",
+          phone: customer.phone || "",
+          address: customer.address || "",
+          type: customer.type || "Regular",
+          walletBalance: customer.wallet_balance || 0,
+          totalDues: customer.outstanding_balance || 0,
+          lastActive:
+            customer.created_at?.split("T")[0] ||
+            new Date().toISOString().split("T")[0],
+        }));
 
         setCustomers(transformedCustomers);
         console.log(`Set ${transformedCustomers.length} customers`);
@@ -104,26 +94,30 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
           const salesData = await salesResponse.json();
           console.log("Raw sales data from API:", salesData);
 
-          const transformedSales = salesData.map((sale: any) => ({
-            id: sale.id?.toString() || "",
-            customerId: sale.customer_id?.toString() || "",
-            customerName: sale.customer_name || "Unknown",
-            date:
-              sale.sale_date?.split("T")[0] ||
-              new Date().toISOString().split("T")[0],
-            items:
-              sale.items?.map((item: any) => ({
+          const transformedSales = salesData.map((sale: any) => {
+            // Handle items - they come as sale_items array
+            const items = sale.sale_items || [];
+
+            return {
+              id: sale.id?.toString() || "",
+              customerId: sale.customerId?.toString() || "",
+              customerName: sale.customerName || "Unknown",
+              date:
+                sale.saleDate?.split("T")[0] ||
+                new Date().toISOString().split("T")[0],
+              items: items.map((item: any) => ({
                 productId: item.id?.toString() || "",
-                productName: item.item_name || item.name || "Item",
+                productName: item.item_name || "Item",
                 quantity: item.quantity || 0,
-                rate: item.unit_price || item.price || 0,
-                amount: item.amount || item.total_price || 0,
-              })) || [],
-            totalAmount: sale.total_amount || 0,
-            paidAmount: sale.paid_amount || 0,
-            paymentStatus: sale.payment_status || "Pending",
-            deliveryStatus: sale.delivery_status || "Pending",
-          }));
+                rate: item.unit_price || 0,
+                amount: item.total_price || 0,
+              })),
+              totalAmount: sale.totalAmount || 0,
+              paidAmount: sale.paidAmount || 0,
+              paymentStatus: sale.paymentStatus || "Pending",
+              deliveryStatus: sale.deliveryStatus || "Pending",
+            };
+          });
 
           setSales(transformedSales);
           console.log("Transformed sales:", transformedSales.length);
@@ -167,20 +161,16 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       const response = await fetch(`${API_BASE}/customers`);
       if (!response.ok) throw new Error("Failed to refresh customers");
       const data = await response.json();
-      console.log("Refreshed customers data:", data);
 
-      // CRITICAL FIX: Same transformation as above
       const transformedCustomers = data.map((customer: any) => ({
         id: customer.id.toString(),
         name: customer.name,
         phone: customer.phone || "",
         address: customer.address || "",
         type: customer.type || "Regular",
-        // FIX: Map database fields to frontend fields
-        walletBalance: customer.walletBalance || customer.wallet_balance || 0,
-        totalDues: customer.totalDues || customer.outstanding_balance || 0,
+        walletBalance: customer.wallet_balance || 0,
+        totalDues: customer.outstanding_balance || 0,
         lastActive:
-          customer.lastActive?.split("T")[0] ||
           customer.created_at?.split("T")[0] ||
           new Date().toISOString().split("T")[0],
       }));
@@ -225,26 +215,29 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       if (!response.ok) throw new Error("Failed to refresh sales");
       const data = await response.json();
 
-      const transformedSales = data.map((sale: any) => ({
-        id: sale.id?.toString() || "",
-        customerId: sale.customer_id?.toString() || "",
-        customerName: sale.customer_name || "Unknown",
-        date:
-          sale.sale_date?.split("T")[0] ||
-          new Date().toISOString().split("T")[0],
-        items:
-          sale.items?.map((item: any) => ({
+      const transformedSales = data.map((sale: any) => {
+        const items = sale.sale_items || [];
+
+        return {
+          id: sale.id?.toString() || "",
+          customerId: sale.customerId?.toString() || "",
+          customerName: sale.customerName || "Unknown",
+          date:
+            sale.saleDate?.split("T")[0] ||
+            new Date().toISOString().split("T")[0],
+          items: items.map((item: any) => ({
             productId: item.id?.toString() || "",
-            productName: item.item_name || item.name || "Item",
+            productName: item.item_name || "Item",
             quantity: item.quantity || 0,
-            rate: item.unit_price || item.price || 0,
-            amount: item.amount || item.total_price || 0,
-          })) || [],
-        totalAmount: sale.total_amount || 0,
-        paidAmount: sale.paid_amount || 0,
-        paymentStatus: sale.payment_status || "Pending",
-        deliveryStatus: sale.delivery_status || "Pending",
-      }));
+            rate: item.unit_price || 0,
+            amount: item.total_price || 0,
+          })),
+          totalAmount: sale.totalAmount || 0,
+          paidAmount: sale.paidAmount || 0,
+          paymentStatus: sale.paymentStatus || "Pending",
+          deliveryStatus: sale.deliveryStatus || "Pending",
+        };
+      });
 
       setSales(transformedSales);
       console.log("Refreshed sales count:", transformedSales.length);
@@ -260,11 +253,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
 
       // The sale is already saved by the backend via the POST request in Sales.tsx
       // Just refresh the data from backend
-
-      // Refresh sales data from backend
       await refreshSales();
 
-      // CRITICAL: Refresh customers to get updated wallet/dues
+      // Refresh customers to get updated wallet/dues
       await refreshCustomers();
 
       console.log("Sale data refreshed successfully");
@@ -304,13 +295,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         phone: newCustomerData.phone || "",
         address: newCustomerData.address || "",
         type: newCustomerData.type || "Regular",
-        // FIX: Map database fields to frontend fields
-        walletBalance:
-          newCustomerData.walletBalance || newCustomerData.wallet_balance || 0,
-        totalDues:
-          newCustomerData.totalDues || newCustomerData.outstanding_balance || 0,
+        walletBalance: newCustomerData.wallet_balance || 0,
+        totalDues: newCustomerData.outstanding_balance || 0,
         lastActive:
-          newCustomerData.lastActive?.split("T")[0] ||
           newCustomerData.created_at?.split("T")[0] ||
           new Date().toISOString().split("T")[0],
       };
@@ -372,7 +359,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       console.log(`Attempting to delete sale with ID: ${saleId}`);
 
       // FIX: Use the correct endpoint that matches your backend
-      const response = await fetch(`${API_BASE}/sales/delete/${saleId}`, {
+      const response = await fetch(`${API_BASE}/sales/${saleId}`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
@@ -404,6 +391,53 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
+  // FIXED: Delete customer function (removed sales check - backend handles cascade deletion)
+  const deleteCustomer = async (customerId: string): Promise<boolean> => {
+    try {
+      console.log(`Attempting to delete customer with ID: ${customerId}`);
+
+      // REMOVED: The sales check - backend now handles cascade deletion
+      // const customerSales = sales.filter((s) => s.customerId === customerId);
+      // if (customerSales.length > 0) {
+      //   throw new Error(
+      //     `Cannot delete customer with ${customerSales.length} existing sales. Delete sales first.`
+      //   );
+      // }
+
+      const response = await fetch(`${API_BASE}/customers/${customerId}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || `Failed to delete customer: ${response.status}`
+        );
+      }
+
+      const result = await response.json();
+      console.log("Delete customer response:", result);
+
+      // Remove customer from local state
+      setCustomers((prev) => prev.filter((c) => c.id !== customerId));
+
+      // Also remove their sales from local state
+      setSales((prev) => prev.filter((sale) => sale.customerId !== customerId));
+
+      console.log(`Customer ${customerId} deleted successfully`);
+      return true;
+    } catch (err) {
+      console.error("Error deleting customer:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to delete customer"
+      );
+      return false;
+    }
+  };
+
   const updateDeliveryStatus = (id: string, status: DeliveryStatus) => {
     setDeliveries((prev) =>
       prev.map((d) => (d.id === id ? { ...d, status } : d))
@@ -421,7 +455,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     addSale,
     addCustomer,
     addExpense,
-    deleteSale, // Added deleteSale function
+    deleteSale,
+    deleteCustomer,
     updateDeliveryStatus,
     refreshCustomers,
     refreshExpenses,

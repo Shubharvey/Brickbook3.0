@@ -37,24 +37,25 @@ const CustomerProfile: React.FC = () => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCollectPaymentOpen, setIsCollectPaymentOpen] = useState(false);
-  const [isAddWalletOpen, setIsAddWalletOpen] = useState(false); // NEW: Wallet modal state
+  const [isAddWalletOpen, setIsAddWalletOpen] = useState(false);
   const [selectedSaleForPayment, setSelectedSaleForPayment] = useState<
     string | null
   >(null);
   const [paymentAmount, setPaymentAmount] = useState<number | "">("");
-  const [walletAmount, setWalletAmount] = useState<number | "">(""); // NEW: Wallet amount
-  const [walletNotes, setWalletNotes] = useState<string>(""); // NEW: Wallet notes
+  const [walletAmount, setWalletAmount] = useState<number | "">("");
+  const [walletNotes, setWalletNotes] = useState<string>("");
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false); // NEW: Payment loading
-  const [isProcessingWallet, setIsProcessingWallet] = useState(false); // NEW: Wallet loading
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isProcessingWallet, setIsProcessingWallet] = useState(false);
   const [deleteSuccess, setDeleteSuccess] = useState<boolean | null>(null);
-  const [paymentSuccess, setPaymentSuccess] = useState<boolean | null>(null); // NEW: Payment success
-  const [walletSuccess, setWalletSuccess] = useState<boolean | null>(null); // NEW: Wallet success
+  const [paymentSuccess, setPaymentSuccess] = useState<boolean | null>(null);
+  const [walletSuccess, setWalletSuccess] = useState<boolean | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // --- Data Retrieval & Calculation ---
+  // --- Data Retrieval ---
   const customer = customers.find((c) => c.id === id);
 
+  // CRITICAL FIX: Use ONLY database values, never calculate wallet balance
   const customerStats = useMemo(() => {
     if (!customer) return null;
 
@@ -75,12 +76,10 @@ const CustomerProfile: React.FC = () => {
       (d) => d.customerName === customer.name && d.status !== "Delivered"
     ).length;
 
-    // Calculate payment stats
-    const totalPaid = customerSales.reduce((acc, s) => acc + s.paidAmount, 0);
-    const totalDue = totalSalesVal - totalPaid;
-
-    // Use ACTUAL wallet balance from database, not calculated
+    // Use ACTUAL database values - these come from backend
+    const totalDue = customer.totalDues || 0;
     const actualWalletBalance = customer.walletBalance || 0;
+    const totalPaid = customer.totalPaid || 0;
 
     return {
       totalSales: totalSalesVal,
@@ -89,9 +88,9 @@ const CustomerProfile: React.FC = () => {
       pendingDeliveries,
       salesHistory: sortedSales,
       totalOrders: customerSales.length,
-      totalPaid,
-      totalDue,
-      walletBalance: actualWalletBalance, // Use ACTUAL database wallet balance
+      totalPaid, // From database
+      totalDue, // From database
+      walletBalance: actualWalletBalance, // From database - CRITICAL: Never calculate this
     };
   }, [customer, sales, deliveries]);
 
@@ -168,7 +167,7 @@ const CustomerProfile: React.FC = () => {
     setIsCollectPaymentOpen(true);
   };
 
-  // --- FIXED: Handle payment submission with fallback API endpoints ---
+  // Fixed: Handle payment submission
   const handleSubmitPayment = async () => {
     if (!paymentAmount || paymentAmount <= 0) {
       alert("Please enter a valid payment amount");
@@ -179,89 +178,51 @@ const CustomerProfile: React.FC = () => {
     setPaymentSuccess(null);
 
     try {
-      const API_BASE = "http://localhost:3001/api";
-
-      // Determine if this is a general payment or linked to a sale
-      if (selectedSaleForPayment) {
-        // Update specific sale payment
-        const response = await fetch(
-          `${API_BASE}/sales/${selectedSaleForPayment}/payment`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              amount: paymentAmount,
-              customerId: customer?.id,
-              notes: `Payment collected for sale ${selectedSaleForPayment}`,
-            }),
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error("Failed to process payment");
+      const response = await fetch(
+        `http://localhost:3001/api/customers/${customer?.id}/collect-payment`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: paymentAmount,
+            paymentMode: "cash",
+            description: selectedSaleForPayment
+              ? `Payment for sale ${selectedSaleForPayment}`
+              : "General payment",
+            notes: "",
+          }),
         }
+      );
 
-        await refreshCustomers();
-        setPaymentSuccess(true);
-        console.log(
-          "Payment collected successfully for sale:",
-          selectedSaleForPayment
-        );
-      } else {
-        // General payment to customer account (adds to wallet)
-        // Try wallet endpoint first
-        let response = await fetch(
-          `${API_BASE}/customers/${customer?.id}/wallet`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              amount: paymentAmount,
-              type: "credit",
-              description: "Payment collected on account",
-              notes: "General payment received",
-            }),
-          }
-        );
-
-        if (!response.ok) {
-          // If wallet endpoint doesn't work, try creating a transaction
-          response = await fetch(`${API_BASE}/transactions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              customerId: customer?.id,
-              amount: paymentAmount,
-              type: "payment_received",
-              description: "Payment collected on account",
-              date: new Date().toISOString().split("T")[0],
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error("Failed to record payment");
-          }
-        }
-
-        await refreshCustomers();
-        setPaymentSuccess(true);
-        console.log("General payment added to wallet successfully");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to process payment");
       }
+
+      await response.json();
+
+      // CRITICAL: Refresh customer data to update UI with database values
+      await refreshCustomers();
+
+      // Small delay to ensure data is loaded
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      setPaymentSuccess(true);
 
       // Close modal and reset
       setIsCollectPaymentOpen(false);
       setSelectedSaleForPayment(null);
       setPaymentAmount("");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error collecting payment:", error);
       setPaymentSuccess(false);
-      alert("Failed to process payment. Please try again.");
+      alert(`Payment failed: ${error.message}`);
     } finally {
       setIsProcessingPayment(false);
     }
   };
 
-  // --- FIXED: Handle adding to wallet with fallback API endpoints ---
+  // Fixed: Handle adding to wallet
   const handleAddToWallet = async () => {
     if (!walletAmount || walletAmount <= 0) {
       alert("Please enter a valid amount");
@@ -272,11 +233,8 @@ const CustomerProfile: React.FC = () => {
     setWalletSuccess(null);
 
     try {
-      const API_BASE = "http://localhost:3001/api";
-
-      // First, check if wallet endpoint exists
       const response = await fetch(
-        `${API_BASE}/customers/${customer?.id}/wallet`,
+        `http://localhost:3001/api/customers/${customer?.id}/wallet`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -290,38 +248,28 @@ const CustomerProfile: React.FC = () => {
       );
 
       if (!response.ok) {
-        // If endpoint doesn't exist, try an alternative approach
-        // Create a special transaction record
-        const transactionResponse = await fetch(`${API_BASE}/transactions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            customerId: customer?.id,
-            amount: walletAmount,
-            type: "wallet_credit",
-            description: walletNotes || "Manual wallet top-up",
-            date: new Date().toISOString().split("T")[0],
-          }),
-        });
-
-        if (!transactionResponse.ok) {
-          throw new Error("Failed to record wallet transaction");
-        }
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to update wallet");
       }
 
+      await response.json();
+
+      // CRITICAL: Refresh customer data to update UI
       await refreshCustomers();
+
+      // Small delay to ensure data is loaded
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
       setWalletSuccess(true);
 
       // Close modal and reset
       setIsAddWalletOpen(false);
       setWalletAmount("");
       setWalletNotes("");
-
-      console.log("Wallet balance updated successfully");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error adding to wallet:", error);
       setWalletSuccess(false);
-      alert("Failed to add to wallet. Please try again.");
+      alert(`Wallet update failed: ${error.message}`);
     } finally {
       setIsProcessingWallet(false);
     }
@@ -342,18 +290,13 @@ const CustomerProfile: React.FC = () => {
     try {
       const success = await deleteSale(saleId);
       if (success) {
-        console.log(`Sale ${saleId} deleted successfully`);
         setDeleteSuccess(true);
 
-        // Refresh customer data to show updated balances
+        // Refresh customer data to show updated balances from database
         await refreshCustomers();
 
-        // Also refresh sales data if available in your store
-        // For now, we'll trigger a state update by waiting a moment
-        setTimeout(() => {
-          // Force a re-render by updating a dummy state
-          setDeleteSuccess(true);
-        }, 500);
+        // Small delay to ensure data is loaded
+        await new Promise((resolve) => setTimeout(resolve, 300));
       } else {
         setDeleteSuccess(false);
         alert("Failed to delete sale. Please try again.");
@@ -414,7 +357,6 @@ const CustomerProfile: React.FC = () => {
   ];
 
   return (
-    // Main Container: Fixed height on desktop to prevent window scrolling, full height on mobile
     <div className="bg-slate-950 text-slate-100 font-sans selection:bg-brand-500/30 flex flex-col md:h-[calc(100vh-65px)] md:overflow-hidden">
       {/* Success/Error Notification */}
       {deleteSuccess !== null && (
@@ -470,7 +412,7 @@ const CustomerProfile: React.FC = () => {
               </p>
               <p className="text-xs opacity-80 mt-0.5">
                 {paymentSuccess
-                  ? "Customer wallet and dues updated."
+                  ? "Customer dues updated and UI refreshed."
                   : "Please try again or check server logs."}
               </p>
             </div>
@@ -501,7 +443,7 @@ const CustomerProfile: React.FC = () => {
               </p>
               <p className="text-xs opacity-80 mt-0.5">
                 {walletSuccess
-                  ? "Wallet balance has been updated."
+                  ? "Wallet balance updated and UI refreshed."
                   : "Please try again or check server logs."}
               </p>
             </div>
@@ -509,9 +451,7 @@ const CustomerProfile: React.FC = () => {
         </div>
       )}
 
-      {/* ===================================================================================
-          MOBILE LAYOUT 
-      ==================================================================================== */}
+      {/* Mobile Layout */}
       <div className="md:hidden flex flex-col min-h-screen pb-24">
         {/* Mobile Header */}
         <div className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md border-b border-slate-800 flex items-center justify-between px-4 py-2">
@@ -881,9 +821,7 @@ const CustomerProfile: React.FC = () => {
         </div>
       </div>
 
-      {/* ===================================================================================
-          DESKTOP LAYOUT (Refined & Compact)
-      ==================================================================================== */}
+      {/* Desktop Layout */}
       <div className="hidden md:flex flex-col h-full min-h-0">
         {/* Main Dashboard Grid */}
         <div className="flex-1 grid grid-cols-12 gap-4 p-4 min-h-0 max-w-[1600px] mx-auto w-full">
@@ -891,7 +829,6 @@ const CustomerProfile: React.FC = () => {
           <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 h-full overflow-y-auto custom-scrollbar pr-1">
             {/* Profile Card with Gradient */}
             <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden group">
-              {/* Decorative Glow */}
               <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent opacity-50"></div>
 
               <div className="relative z-10 flex flex-col items-center text-center">
@@ -1007,7 +944,6 @@ const CustomerProfile: React.FC = () => {
                   </button>
                 </div>
               </div>
-              {/* Background decoration */}
               <div className="absolute -bottom-10 -right-10 w-24 h-24 bg-brand-500/10 rounded-full blur-3xl"></div>
             </div>
           </div>
@@ -1052,7 +988,6 @@ const CustomerProfile: React.FC = () => {
               {activeTab === "overview" && (
                 <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                    {/* Rich Gradient Cards matching mobile smooth feel */}
                     <div className="xl:col-span-2 bg-gradient-to-br from-brand-600 to-brand-800 rounded-2xl p-5 text-white shadow-lg shadow-brand-900/20 relative overflow-hidden group">
                       <div className="relative z-10">
                         <p className="text-[10px] font-bold opacity-70 mb-1 uppercase tracking-wide">
@@ -1346,7 +1281,6 @@ const CustomerProfile: React.FC = () => {
                   <div className="relative border-l-2 border-slate-800/50 ml-2 space-y-8">
                     {customerStats.salesHistory.map((sale) => (
                       <div key={sale.id} className="relative pl-8 group">
-                        {/* Timeline Dot */}
                         <span
                           className={`absolute -left-[7px] top-2 h-3.5 w-3.5 rounded-full border-[3px] border-slate-900 shadow-md group-hover:scale-125 transition-transform duration-300 ${
                             sale.paymentStatus === "Paid"
@@ -1416,7 +1350,7 @@ const CustomerProfile: React.FC = () => {
         </div>
       </div>
 
-      {/* --- Collect Payment Modal (Shared) --- */}
+      {/* Collect Payment Modal */}
       {isCollectPaymentOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div
@@ -1514,7 +1448,7 @@ const CustomerProfile: React.FC = () => {
         </div>
       )}
 
-      {/* --- NEW: Add to Wallet Modal --- */}
+      {/* Add to Wallet Modal */}
       {isAddWalletOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div
@@ -1592,7 +1526,7 @@ const CustomerProfile: React.FC = () => {
         </div>
       )}
 
-      {/* --- Edit Customer Modal (Shared) --- */}
+      {/* Edit Customer Modal */}
       {isEditMode && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div

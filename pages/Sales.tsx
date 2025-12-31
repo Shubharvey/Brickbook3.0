@@ -269,25 +269,22 @@ const Sales: React.FC = () => {
     try {
       setIsLoading(true);
 
-      // Get calculated values
       const {
         cashPaid,
         walletAmount,
         dueAmount: calculatedDueAmount,
         grandTotal,
       } = calculatePaymentBreakdown();
+
       const paymentStatus = getPaymentStatus();
 
-      // In handleSingleSubmit function, replace this section:
       let actualAdvancePaid = 0;
       let actualDueAmount = calculatedDueAmount;
 
       if (paymentType === "Dues + Cash") {
         actualAdvancePaid = Number(advancePaid) || 0;
-        actualDueAmount = calculatedDueAmount;
       } else if (paymentType === "Advance + Cash") {
         actualAdvancePaid = walletAmount;
-        actualDueAmount = calculatedDueAmount;
       } else if (paymentType === "Full Advance") {
         actualAdvancePaid = walletAmount;
         actualDueAmount = 0;
@@ -299,43 +296,34 @@ const Sales: React.FC = () => {
         actualDueAmount = 0;
       }
 
-      // Generate a unique original_id for the backend
-      const originalId = `SALE-${Date.now()}-${Math.random()
-        .toString(36)
-        .substr(2, 9)}`;
-
       const saleData = {
-        id: originalId, // This will be used as original_id in backend
         customerId: selectedCustomerId,
         customerName: selectedCustomer?.name || "Unknown",
         date: view === "backdated" ? backdatedDate : date,
+
         items: cartItems.map((item) => ({
           name: item.name,
           quantity: item.quantity,
           price: item.price,
           amount: item.amount,
         })),
+
         totalAmount: grandTotal,
         paidAmount: cashPaid + walletAmount,
-        paymentStatus: paymentStatus,
-        deliveryStatus: deliveryStatus,
-        paymentMode: paymentMode,
-        paymentType: paymentType,
-        discount: { type: discountType, value: Number(discountValue) || 0 },
-        advancePaid: actualAdvancePaid, // FIXED: Use correct advancePaid
-        dueAmount: actualDueAmount, // FIXED: Use calculated dueAmount
+        paymentStatus,
+        deliveryStatus,
+        paymentMode,
+        paymentType,
+
+        discount: {
+          type: discountType,
+          value: Number(discountValue) || 0,
+        },
+
+        advancePaid: actualAdvancePaid,
+        dueAmount: actualDueAmount,
         dueDate: dueDate || null,
       };
-
-      console.log("=== SENDING SALE DATA ===");
-      console.log("Payment Type:", paymentType);
-      console.log("Grand Total:", grandTotal);
-      console.log("Cash Paid:", cashPaid);
-      console.log("Wallet Amount:", walletAmount);
-      console.log("Advance Paid (to backend):", actualAdvancePaid);
-      console.log("Due Amount (to backend):", actualDueAmount);
-      console.log("Total Paid (cash + wallet):", cashPaid + walletAmount);
-      console.log("Sale Data:", saleData);
 
       const response = await fetch("http://localhost:3001/api/sales", {
         method: "POST",
@@ -345,73 +333,32 @@ const Sales: React.FC = () => {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("Backend error response:", errorText);
-        throw new Error(errorText || "Failed to save sale.");
+        throw new Error(errorText);
       }
 
       const savedSale = await response.json();
-      console.log("Backend response:", savedSale);
 
-      // Transform the backend response to match frontend Sale type
-      const frontendSale: Sale = {
-        id: savedSale.id?.toString() || Date.now().toString(),
-        customerId: savedSale.customer_id?.toString() || selectedCustomerId,
-        customerName:
-          savedSale.customer_name || selectedCustomer?.name || "Unknown",
-        date: savedSale.sale_date || date,
-        items:
-          savedSale.items?.map((item: any) => ({
-            productId: item.id?.toString() || Date.now().toString(),
-            productName: item.item_name || item.name || "Item",
-            quantity: item.quantity,
-            rate: item.unit_price || item.price,
-            amount: item.amount || item.total_price,
-          })) ||
-          cartItems.map((item) => ({
-            productId: Date.now().toString(),
-            productName: item.name,
-            quantity: item.quantity,
-            rate: item.price,
-            amount: item.amount,
-          })),
-        totalAmount: savedSale.total_amount || grandTotal,
-        paidAmount: savedSale.paid_amount || cashPaid + walletAmount,
-        paymentStatus: savedSale.payment_status || paymentStatus || "Pending",
-        deliveryStatus:
-          savedSale.delivery_status || deliveryStatus || "Pending",
-      };
+      addSale({
+        id: savedSale.id,
+        customerId: savedSale.customer_id,
+        customerName: savedSale.customer_name,
+        date: savedSale.sale_date,
+        items: cartItems,
+        totalAmount: savedSale.total_amount,
+        paidAmount: savedSale.paid_amount,
+        paymentStatus: savedSale.payment_status,
+        deliveryStatus: savedSale.delivery_status,
+      });
 
-      addSale(frontendSale);
-
-      // Clean Reset
       setCartItems([]);
-      setQty("");
-      setRate("");
       setAdvancePaid("");
       setWalletUsed("");
       setDueDate("");
       setDiscountValue("");
-      setCustomProductName("");
       setSelectedCustomerId("");
-      setCustomerSearchQuery("");
 
-      // Show detailed success message
-      let successMessage = `✅ Sale saved successfully!\n`;
-      successMessage += `Total: ₹${grandTotal.toLocaleString()}\n`;
-      successMessage += `Paid: ₹${(
-        cashPaid + walletAmount
-      ).toLocaleString()}\n`;
-
-      if (actualDueAmount > 0) {
-        successMessage += `Dues: ₹${actualDueAmount.toLocaleString()}`;
-        if (dueDate) {
-          successMessage += ` (Due: ${dueDate})`;
-        }
-      }
-
-      alert(successMessage);
+      alert("✅ Sale saved successfully");
     } catch (error: any) {
-      console.error("SAVE ERROR:", error);
       alert(`❌ Error: ${error.message}`);
     } finally {
       setIsLoading(false);

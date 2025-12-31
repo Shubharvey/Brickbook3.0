@@ -1,162 +1,635 @@
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
-const sqlite3 = require("sqlite3").verbose();
+require("dotenv").config();
+const supabase = require("./supabase");
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
-// --- MIDDLEWARE ---
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+// Middleware
+app.use(cors());
+app.use(express.json());
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-// Simple Native Logger (Replaces morgan to avoid dependency errors)
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
+// Health check
+app.get("/api/health", (req, res) => {
+  res.json({ status: "OK", database: "Supabase" });
 });
 
-// --- DATABASE SETUP ---
-const dbPath = path.resolve(__dirname, "brickbook.db");
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error("CRITICAL DATABASE ERROR:", err.message);
-  } else {
-    console.log(`DATABASE: Connected to SQLite at ${dbPath}`);
-    initializeDatabase();
+// SALES API
+app.get("/api/sales", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("sales")
+      .select("*, sale_items(*)")
+      .order("saleDate", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Export the db instance for other modules
-module.exports.db = db;
+app.post("/api/sales", async (req, res) => {
+  try {
+    const saleData = req.body;
+    console.log("Creating sale:", saleData);
 
-function initializeDatabase() {
-  db.serialize(() => {
-    // 1. Customers Table (Already exists, ensures wallet_balance and outstanding_balance are there)
-    db.run(`CREATE TABLE IF NOT EXISTS customers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      phone TEXT,
-      email TEXT,
-      address TEXT,
-      wallet_balance DECIMAL(15,2) DEFAULT 0,
-      outstanding_balance DECIMAL(15,2) DEFAULT 0,
-      total_purchases DECIMAL(15,2) DEFAULT 0,
-      type TEXT DEFAULT 'Regular',
-      last_active DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+    const {
+      customerId,
+      customerName,
+      date,
+      items,
+      totalAmount,
+      paidAmount,
+      paymentStatus,
+      deliveryStatus,
+      paymentMode,
+      paymentType,
+      advancePaid = 0,
+      dueAmount = 0,
+      dueDate,
+      discount,
+    } = saleData;
 
-    // 2. Sales Table - UPDATED WITH original_id COLUMN
-    db.run(`CREATE TABLE IF NOT EXISTS sales (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      original_id TEXT,
-      customer_id INTEGER,
-      customer_name TEXT,
-      product_name TEXT,
-      sale_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-      total_amount DECIMAL(15,2) DEFAULT 0,
-      paid_amount DECIMAL(15,2) DEFAULT 0,
-      due_amount DECIMAL(15,2) DEFAULT 0,
-      balance_due DECIMAL(15,2) DEFAULT 0,
-      advance_paid DECIMAL(15,2) DEFAULT 0,
-      payment_type TEXT,
-      payment_mode TEXT,
-      payment_status TEXT CHECK(payment_status IN ('Paid', 'Partial', 'Pending')) DEFAULT 'Pending',
-      delivery_status TEXT CHECK(delivery_status IN ('Pending', 'Scheduled', 'Delivered')) DEFAULT 'Pending',
-      category TEXT,
-      due_date DATETIME,
-      discount_type TEXT DEFAULT 'Fixed',
-      discount_value DECIMAL(15,2) DEFAULT 0,
-      status TEXT DEFAULT 'Completed',
-      notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )`);
+    // CRITICAL: Get customer's current wallet balance FIRST
+    const { data: customer, error: customerError } = await supabase
+      .from("customers")
+      .select("wallet_balance")
+      .eq("id", customerId)
+      .single();
 
-    // 3. Sale Items Table - Uses item_name, NOT product_id
-    db.run(`CREATE TABLE IF NOT EXISTS sale_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sale_id INTEGER,
-      item_name TEXT,
-      quantity INTEGER,
-      unit_price DECIMAL(15,2),
-      amount DECIMAL(15,2),
-      total_price DECIMAL(15,2),
-      FOREIGN KEY (sale_id) REFERENCES sales (id)
-    )`);
+    if (customerError) throw customerError;
 
-    // NEW: 4. Transactions Table for customer wallet and payments
-    db.run(`CREATE TABLE IF NOT EXISTS transactions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      customer_id INTEGER NOT NULL,
-      amount DECIMAL(15,2) NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('credit', 'debit', 'payment', 'dues_applied')),
-      description TEXT,
-      notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )`);
+    // Calculate what wallet will be used based on payment type
+    let walletUsed = 0;
+    let cashPaid = 0;
 
-    console.log("DATABASE: Schema initialized successfully.");
-  });
-}
+    switch (paymentType) {
+      case "Cash":
+        walletUsed = 0;
+        cashPaid = totalAmount;
+        break;
 
-// --- ROUTES ---
+      case "Credit":
+        walletUsed = 0;
+        cashPaid = 0;
+        break;
 
-// IMPORT ROUTE FILES
-const customersRouter = require("./routes/customers");
-const salesRouter = require("./routes/sales");
+      case "Dues + Cash":
+        walletUsed = 0;
+        cashPaid = advancePaid; // This is CASH paid now, not wallet
+        break;
 
-// Use the correct db instance for routes
-app.use("/api/customers", customersRouter); // Use the customers.js route file
-app.use("/api/sales", salesRouter); // Use the sales.js route file
+      case "Advance + Cash":
+        // advancePaid here is the wallet amount to use
+        walletUsed = Math.min(advancePaid, totalAmount);
+        if (walletUsed > customer.wallet_balance) {
+          return res.status(400).json({
+            error: "Insufficient wallet balance",
+            currentBalance: customer.wallet_balance,
+            requested: walletUsed,
+          });
+        }
+        cashPaid = totalAmount - walletUsed;
+        break;
 
-// Health Check
-app.get("/api/health", (req, res) =>
-  res.json({ status: "healthy", timestamp: new Date() })
-);
-
-// Get all sales directly (for testing ONLY - remove later)
-app.get("/api/sales/all", (req, res) => {
-  db.all("SELECT * FROM sales ORDER BY sale_date DESC", [], (err, rows) => {
-    if (err) {
-      console.error("Error fetching sales:", err.message);
-      return res.status(500).json({ error: err.message });
+      case "Full Advance":
+        // advancePaid here should equal totalAmount (full from wallet)
+        walletUsed = totalAmount;
+        if (walletUsed > customer.wallet_balance) {
+          return res.status(400).json({
+            error: "Insufficient wallet balance",
+            currentBalance: customer.wallet_balance,
+            requested: walletUsed,
+          });
+        }
+        cashPaid = 0;
+        break;
     }
-    res.json(rows);
-  });
+
+    // 1. Create sale record
+    const sale = {
+      customerId,
+      customerName,
+      saleDate: date || new Date().toISOString(),
+      totalAmount,
+      paidAmount: cashPaid + walletUsed,
+      dueAmount: dueAmount || 0,
+      wallet_used: walletUsed, // Only for Advance + Cash and Full Advance
+      paymentMode,
+      paymentType,
+      paymentStatus: paymentStatus || "pending",
+      deliveryStatus: deliveryStatus || "pending",
+      dueDate: dueDate || null,
+      discountType: discount?.type || null,
+      discountValue: discount?.value || 0,
+      status: "completed",
+    };
+
+    const { data: saleResult, error: saleError } = await supabase
+      .from("sales")
+      .insert([sale])
+      .select()
+      .single();
+
+    if (saleError) throw saleError;
+
+    // 2. Create sale items
+    if (items && items.length > 0) {
+      const saleItems = items.map((item) => ({
+        sale_id: saleResult.id,
+        item_name: item.name,
+        quantity: item.quantity,
+        unit_price: item.price,
+        total_price: item.amount || item.quantity * item.price,
+      }));
+
+      const { error: itemsError } = await supabase
+        .from("sale_items")
+        .insert(saleItems);
+
+      if (itemsError) throw itemsError;
+    }
+
+    // 3. Update customer wallet ONLY if wallet was used
+    if (walletUsed > 0) {
+      const newWalletBalance = customer.wallet_balance - walletUsed;
+
+      const { error: walletError } = await supabase
+        .from("customers")
+        .update({
+          wallet_balance: newWalletBalance,
+        })
+        .eq("id", customerId);
+
+      if (walletError) {
+        console.error("Wallet update failed:", walletError);
+        // Rollback the sale creation if wallet update fails
+        await supabase.from("sales").delete().eq("id", saleResult.id);
+        throw walletError;
+      }
+    }
+
+    // 4. Update customer outstanding balance if due amount > 0
+    if (dueAmount > 0) {
+      const { data: currentCustomer, error: fetchError } = await supabase
+        .from("customers")
+        .select("outstanding_balance")
+        .eq("id", customerId)
+        .single();
+
+      if (!fetchError && currentCustomer) {
+        const newOutstandingBalance =
+          currentCustomer.outstanding_balance + dueAmount;
+
+        const { error: duesError } = await supabase
+          .from("customers")
+          .update({
+            outstanding_balance: newOutstandingBalance,
+          })
+          .eq("id", customerId);
+
+        if (duesError) console.error("Dues update failed:", duesError);
+      }
+    }
+
+    // 5. Return complete sale with items
+    const { data: completeSale, error: fetchError } = await supabase
+      .from("sales")
+      .select("*, sale_items(*)")
+      .eq("id", saleResult.id)
+      .single();
+
+    if (fetchError) {
+      console.error("Fetch complete sale error:", fetchError);
+      res.status(201).json(saleResult);
+    } else {
+      res.status(201).json(completeSale);
+    }
+  } catch (err) {
+    console.error("Create sale error:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 404 Handler
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
+// CUSTOMERS API
+app.get("/api/customers", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("customers")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Error Handler
-app.use((err, req, res, next) => {
-  console.error("Server Error:", err.stack);
-  res.status(500).json({ error: "Internal server error" });
+app.post("/api/customers", async (req, res) => {
+  try {
+    const { name, phone, address } = req.body;
+    const customer = {
+      name,
+      phone: phone || "",
+      address: address || "",
+      wallet_balance: 0,
+      outstanding_balance: 0,
+    };
+
+    const { data, error } = await supabase
+      .from("customers")
+      .insert([customer])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
+// CUSTOMER WALLET API
+app.post("/api/customers/:id/wallet", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, type, description, notes } = req.body;
+
+    console.log("Wallet request:", { id, amount, type, description, notes });
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    // Get current balance
+    const { data: customer, error: fetchError } = await supabase
+      .from("customers")
+      .select("wallet_balance")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    // Calculate new balance
+    let newBalance;
+    let operation = "credit"; // Default to adding to wallet
+
+    if (type && type.toLowerCase() === "debit") {
+      if (customer.wallet_balance < amount) {
+        return res.status(400).json({
+          error: "Insufficient wallet balance",
+          currentBalance: customer.wallet_balance,
+        });
+      }
+      newBalance = customer.wallet_balance - amount;
+      operation = "debit";
+    } else {
+      newBalance = customer.wallet_balance + amount;
+    }
+
+    // Update wallet balance
+    const { error: updateError } = await supabase
+      .from("customers")
+      .update({ wallet_balance: newBalance })
+      .eq("id", id);
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      newBalance,
+      operation,
+      message: `Wallet ${
+        operation === "credit" ? "credited" : "debited"
+      } with ₹${amount}`,
+    });
+  } catch (err) {
+    console.error("Wallet error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// COLLECT PAYMENT API
+app.post("/api/customers/:id/collect-payment", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, paymentMode, description, notes } = req.body;
+
+    console.log("Collect payment request:", {
+      id,
+      amount,
+      paymentMode,
+      description,
+      notes,
+    });
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    // Get current dues
+    const { data: customer, error: fetchError } = await supabase
+      .from("customers")
+      .select("outstanding_balance")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    if (customer.outstanding_balance < amount) {
+      return res.status(400).json({
+        error: "Payment amount exceeds outstanding balance",
+        currentDues: customer.outstanding_balance,
+      });
+    }
+
+    const newBalance = customer.outstanding_balance - amount;
+
+    // Update outstanding balance
+    const { error: updateError } = await supabase
+      .from("customers")
+      .update({ outstanding_balance: newBalance })
+      .eq("id", id);
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      newBalance,
+      paymentReceived: amount,
+      message: `Payment of ₹${amount} collected. Remaining dues: ₹${newBalance}`,
+    });
+  } catch (err) {
+    console.error("Collect payment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE SALE API
+app.delete("/api/sales/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // First get the sale details
+    const { data: sale, error: fetchError } = await supabase
+      .from("sales")
+      .select("customerId, wallet_used, dueAmount, paymentType")
+      .eq("id", id)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    const { customerId, wallet_used = 0, dueAmount = 0, paymentType } = sale;
+
+    // Delete sale items first
+    const { error: itemsError } = await supabase
+      .from("sale_items")
+      .delete()
+      .eq("sale_id", id);
+
+    if (itemsError) throw itemsError;
+
+    // Delete the sale
+    const { error: deleteError } = await supabase
+      .from("sales")
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) throw deleteError;
+
+    // Reverse wallet balance if wallet was used
+    if (
+      wallet_used > 0 &&
+      (paymentType === "Advance + Cash" || paymentType === "Full Advance")
+    ) {
+      const { data: customer, error: custError } = await supabase
+        .from("customers")
+        .select("wallet_balance")
+        .eq("id", customerId)
+        .single();
+
+      if (!custError && customer) {
+        const newWalletBalance = customer.wallet_balance + wallet_used;
+
+        const { error: walletError } = await supabase
+          .from("customers")
+          .update({ wallet_balance: newWalletBalance })
+          .eq("id", customerId);
+
+        if (walletError) console.error("Wallet reversal failed:", walletError);
+      }
+    }
+
+    // Reverse outstanding balance if there was due amount
+    if (dueAmount > 0) {
+      const { data: customer, error: custError } = await supabase
+        .from("customers")
+        .select("outstanding_balance")
+        .eq("id", customerId)
+        .single();
+
+      if (!custError && customer) {
+        const newOutstandingBalance = customer.outstanding_balance - dueAmount;
+
+        const { error: duesError } = await supabase
+          .from("customers")
+          .update({ outstanding_balance: newOutstandingBalance })
+          .eq("id", customerId);
+
+        if (duesError) console.error("Dues reversal failed:", duesError);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "Sale deleted and balances adjusted",
+      reversed: {
+        wallet: wallet_used,
+        dues: dueAmount,
+      },
+    });
+  } catch (err) {
+    console.error("Delete sale error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE CUSTOMER API - COMPLETE CASCADE DELETION (FIXED VERSION)
+app.delete("/api/customers/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log(`Starting deletion for customer ${id}`);
+
+    // 1. Get ALL sales for this customer (not just basic info)
+    const { data: customerSales, error: salesError } = await supabase
+      .from("sales")
+      .select("id, wallet_used, dueAmount, paymentType, customerId")
+      .eq("customerId", id);
+
+    if (salesError) {
+      console.error("Error fetching sales:", salesError);
+      throw salesError;
+    }
+
+    console.log(`Found ${customerSales?.length || 0} sales for customer`);
+
+    let walletToRestore = 0;
+    let duesToDeduct = 0;
+
+    // 2. Process each sale individually to avoid batch issues
+    if (customerSales && customerSales.length > 0) {
+      for (const sale of customerSales) {
+        console.log(`Processing sale ${sale.id}`);
+
+        // 2a. Delete sale_items for this sale
+        const { error: itemsError } = await supabase
+          .from("sale_items")
+          .delete()
+          .eq("sale_id", sale.id);
+
+        if (itemsError) {
+          console.error(
+            `Error deleting sale_items for sale ${sale.id}:`,
+            itemsError
+          );
+          throw itemsError;
+        }
+        console.log(`Deleted sale_items for sale ${sale.id}`);
+
+        // 2b. Calculate wallet and dues to restore
+        if (
+          sale.wallet_used > 0 &&
+          (sale.paymentType === "Advance + Cash" ||
+            sale.paymentType === "Full Advance")
+        ) {
+          walletToRestore += sale.wallet_used;
+        }
+
+        if (sale.dueAmount > 0) {
+          duesToDeduct += sale.dueAmount;
+        }
+
+        // 2c. Delete the sale
+        const { error: deleteSaleError } = await supabase
+          .from("sales")
+          .delete()
+          .eq("id", sale.id);
+
+        if (deleteSaleError) {
+          console.error(`Error deleting sale ${sale.id}:`, deleteSaleError);
+          throw deleteSaleError;
+        }
+        console.log(`Deleted sale ${sale.id}`);
+      }
+
+      // 3. Update customer balances after deleting all sales
+      if (walletToRestore > 0 || duesToDeduct > 0) {
+        console.log(
+          `Updating balances: Wallet +₹${walletToRestore}, Dues -₹${duesToDeduct}`
+        );
+
+        // Get current balances
+        const { data: customer, error: custError } = await supabase
+          .from("customers")
+          .select("wallet_balance, outstanding_balance")
+          .eq("id", id)
+          .single();
+
+        if (!custError && customer) {
+          const updates = {
+            wallet_balance: customer.wallet_balance + walletToRestore,
+            outstanding_balance: Math.max(
+              0,
+              customer.outstanding_balance - duesToDeduct
+            ),
+          };
+
+          const { error: updateError } = await supabase
+            .from("customers")
+            .update(updates)
+            .eq("id", id);
+
+          if (updateError) {
+            console.error("Balance update failed:", updateError);
+            // Don't throw, just log - customer deletion should still proceed
+          } else {
+            console.log(`Updated customer balances successfully`);
+          }
+        }
+      }
+    }
+
+    // 4. Delete any payments linked to this customer
+    try {
+      const { error: paymentsError } = await supabase
+        .from("payments")
+        .delete()
+        .eq("customer_id", id);
+
+      if (paymentsError && !paymentsError.message.includes("No rows found")) {
+        console.error("Payments deletion error:", paymentsError);
+      } else {
+        console.log("Deleted linked payments (if any)");
+      }
+    } catch (paymentsErr) {
+      console.error("Payments deletion non-critical error:", paymentsErr);
+    }
+
+    // 5. Delete any account linked to this customer
+    try {
+      const { error: accountError } = await supabase
+        .from("accounts")
+        .delete()
+        .eq("customer_id", id);
+
+      if (accountError && !accountError.message.includes("No rows found")) {
+        console.error("Account deletion error:", accountError);
+      } else {
+        console.log("Deleted linked account (if any)");
+      }
+    } catch (accountErr) {
+      console.error("Account deletion non-critical error:", accountErr);
+    }
+
+    // 6. Finally delete the customer
+    const { error: deleteError } = await supabase
+      .from("customers")
+      .delete()
+      .eq("id", id);
+
+    if (deleteError) {
+      console.error("Error deleting customer:", deleteError);
+      throw deleteError;
+    }
+
+    console.log(`Customer ${id} deleted successfully`);
+
+    res.json({
+      success: true,
+      message: `Customer deleted successfully along with ${
+        customerSales?.length || 0
+      } sales`,
+      restored: {
+        wallet: walletToRestore,
+        dues: duesToDeduct,
+      },
+    });
+  } catch (err) {
+    console.error("Delete customer error:", err);
+    res.status(500).json({
+      error: err.message,
+      details:
+        "Make sure all foreign key constraints are handled. Check console for more details.",
+    });
+  }
+});
+
+// Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Available endpoints:`);
-  console.log(`   GET  /api/health`);
-  console.log(`   GET  /api/customers`);
-  console.log(`   POST /api/customers`);
-  console.log(`   GET  /api/customers/:id/wallet (POST, GET)`);
-  console.log(`   POST /api/customers/:id/collect-payment`);
-  console.log(`   GET  /api/sales`);
-  console.log(`   POST /api/sales`);
-  console.log(`   GET  /api/sales/all (test only)`);
+  console.log(`🚀 Backend running on http://localhost:${PORT}`);
+  console.log(`📊 Database: Supabase`);
 });
