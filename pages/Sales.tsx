@@ -325,11 +325,14 @@ const Sales: React.FC = () => {
         dueDate: dueDate || null,
       };
 
-      const response = await fetch("http://localhost:3001/api/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(saleData),
-      });
+      const response = await fetch(
+        "https://brickbook-backend.vercel.app/api/sales",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(saleData),
+        }
+      );
 
       if (!response.ok) {
         const errorText = await response.text();

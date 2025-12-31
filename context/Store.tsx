@@ -48,7 +48,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
   const [error, setError] = useState<string | null>(null);
 
   // API base URL
-  const API_BASE = "http://localhost:3001/api";
+  const API_BASE = "https://brickbook-backend.vercel.app/api";
 
   // Fetch initial data
   useEffect(() => {

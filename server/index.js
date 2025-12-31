@@ -6,16 +6,323 @@ const supabase = require("./supabase");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+// Middleware - UNIVERSAL CORS CONFIGURATION
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
 
-// Health check
+      // List of allowed origins
+      const allowedOrigins = [
+        "http://localhost:3000", // Your frontend localhost
+        "http://localhost:5173", // Vite dev server
+        "http://localhost:3001", // Backend itself
+        "https://jjbhatta.vercel.app",
+        "https://*.vercel.app", // All Vercel subdomains
+        /\.vercel\.app$/, // Regex for all vercel domains
+        /\.onrender\.com$/, // If you deploy elsewhere
+        /\.netlify\.app$/, // If you deploy elsewhere
+        "http://192.168.*.*", // Local network
+        "http://10.*.*.*", // Local network
+        "http://172.16.*.*", // Local network
+        "http://172.17.*.*",
+        "http://172.18.*.*",
+        "http://172.19.*.*",
+        "http://172.20.*.*",
+        "http://172.21.*.*",
+        "http://172.22.*.*",
+        "http://172.23.*.*",
+        "http://172.24.*.*",
+        "http://172.25.*.*",
+        "http://172.26.*.*",
+        "http://172.27.*.*",
+        "http://172.28.*.*",
+        "http://172.29.*.*",
+        "http://172.30.*.*",
+        "http://172.31.*.*",
+      ];
+
+      // Check if the origin matches any allowed pattern
+      const isAllowed = allowedOrigins.some((allowed) => {
+        if (typeof allowed === "string") {
+          return origin === allowed;
+        } else if (allowed instanceof RegExp) {
+          return allowed.test(origin);
+        }
+        return false;
+      });
+
+      if (isAllowed || process.env.NODE_ENV === "development") {
+        callback(null, true);
+      } else {
+        console.log("CORS blocked origin:", origin);
+        // Still allow it but log (for testing)
+        callback(null, true);
+        // For production: callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "Origin",
+      "X-Requested-With",
+      "X-Access-Token",
+      "X-CSRF-Token",
+      "Access-Control-Allow-Headers",
+      "Access-Control-Request-Headers",
+      "Access-Control-Request-Method",
+      "Cache-Control",
+      "Pragma",
+    ],
+    exposedHeaders: [
+      "Content-Length",
+      "Content-Type",
+      "Authorization",
+      "Access-Control-Allow-Origin",
+      "Access-Control-Allow-Credentials",
+      "X-Powered-By",
+    ],
+    optionsSuccessStatus: 204,
+    preflightContinue: false,
+    maxAge: 86400, // 24 hours
+    // Handle cookies if needed
+    // credentials: true // Already set above
+  })
+);
+
+// Handle preflight requests explicitly
+app.options("*", cors());
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ==================== AUTH MIDDLEWARE ====================
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Access token required" });
+  }
+
+  try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Health check with CORS headers
 app.get("/api/health", (req, res) => {
-  res.json({ status: "OK", database: "Supabase" });
+  res.json({
+    status: "OK",
+    database: "Supabase",
+    timestamp: new Date().toISOString(),
+    cors: "enabled",
+  });
 });
 
-// SALES API
+// Test endpoint for mobile devices
+app.get("/api/test-mobile", (req, res) => {
+  res.json({
+    success: true,
+    message: "Mobile access test successful",
+    origin: req.headers.origin || "No origin header",
+    userAgent: req.headers["user-agent"],
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ==================== AUTH ENDPOINTS ====================
+
+// SIGNUP
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const { email, password, phone, full_name } = req.body;
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      phone,
+      options: {
+        data: {
+          full_name: full_name || "",
+          phone: phone || "",
+        },
+      },
+    });
+
+    if (error) throw error;
+
+    // Auto-create profile after signup
+    if (data.user) {
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        email: data.user.email,
+        full_name: full_name || data.user.user_metadata?.full_name || "",
+        phone: phone || data.user.phone || "",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      user: data.user,
+      message: "Signup successful! Check your email for verification.",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// LOGIN
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+
+    // Ensure profile exists
+    await supabase.from("profiles").upsert({
+      id: data.user.id,
+      email: data.user.email,
+      full_name: data.user.user_metadata?.full_name || "",
+      phone: data.user.phone || "",
+      updated_at: new Date().toISOString(),
+    });
+
+    res.json({
+      user: data.user,
+      session: data.session,
+      access_token: data.session.access_token,
+    });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// LOGOUT
+app.post("/api/auth/logout", authenticateToken, async (req, res) => {
+  try {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    res.json({ message: "Logged out successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PASSWORD RESET
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: "https://jjbhatta.vercel.app/reset-password",
+    });
+
+    if (error) throw error;
+
+    res.json({
+      message: "Password reset email sent. Check your inbox.",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// AUTO-CREATE PROFILE ENDPOINT
+app.post("/api/auth/create-profile", authenticateToken, async (req, res) => {
+  try {
+    const { full_name, phone } = req.body;
+
+    const { error } = await supabase.from("profiles").upsert({
+      id: req.user.id,
+      email: req.user.email,
+      full_name: full_name || req.user.user_metadata?.full_name || "",
+      phone: phone || req.user.phone || "",
+      updated_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
+
+    res.json({ message: "Profile created/updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET USER PROFILE
+app.get("/api/auth/profile", authenticateToken, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", req.user.id)
+      .single();
+
+    if (error && error.code !== "PGRST116") throw error; // PGRST116 = no rows returned
+
+    res.json({
+      user: req.user,
+      profile: profile || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE USER PROFILE
+app.put("/api/auth/profile", authenticateToken, async (req, res) => {
+  try {
+    const { full_name, phone } = req.body;
+
+    const { error } = await supabase.from("profiles").upsert({
+      id: req.user.id,
+      email: req.user.email,
+      full_name: full_name || "",
+      phone: phone || "",
+      updated_at: new Date().toISOString(),
+    });
+
+    if (error) throw error;
+
+    res.json({ message: "Profile updated successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PROTECTED TEST ENDPOINT
+app.get("/api/protected-data", authenticateToken, async (req, res) => {
+  res.json({
+    message: `Hello ${req.user.email}`,
+    userId: req.user.id,
+    timestamp: new Date().toISOString(),
+    origin: req.headers.origin || "No origin header",
+  });
+});
+
+// ==================== SALES API ====================
 app.get("/api/sales", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -213,7 +520,7 @@ app.post("/api/sales", async (req, res) => {
   }
 });
 
-// CUSTOMERS API
+// ==================== CUSTOMERS API ====================
 app.get("/api/customers", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -252,7 +559,7 @@ app.post("/api/customers", async (req, res) => {
   }
 });
 
-// CUSTOMER WALLET API
+// ==================== CUSTOMER WALLET API ====================
 app.post("/api/customers/:id/wallet", async (req, res) => {
   try {
     const { id } = req.params;
@@ -312,7 +619,7 @@ app.post("/api/customers/:id/wallet", async (req, res) => {
   }
 });
 
-// COLLECT PAYMENT API
+// ==================== COLLECT PAYMENT API ====================
 app.post("/api/customers/:id/collect-payment", async (req, res) => {
   try {
     const { id } = req.params;
@@ -368,7 +675,7 @@ app.post("/api/customers/:id/collect-payment", async (req, res) => {
   }
 });
 
-// DELETE SALE API
+// ==================== DELETE SALE API ====================
 app.delete("/api/sales/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -457,7 +764,7 @@ app.delete("/api/sales/:id", async (req, res) => {
   }
 });
 
-// DELETE CUSTOMER API - COMPLETE CASCADE DELETION (FIXED VERSION)
+// ==================== DELETE CUSTOMER API ====================
 app.delete("/api/customers/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -628,8 +935,12 @@ app.delete("/api/customers/:id", async (req, res) => {
   }
 });
 
-// Start server
+// ==================== START SERVER ====================
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`);
   console.log(`📊 Database: Supabase`);
+  console.log(`🔐 Authentication endpoints available`);
+  console.log(`👤 Auto-profile creation enabled`);
+  console.log(`🌐 CORS: Enabled for all origins (universal access)`);
+  console.log(`📱 Mobile access: Enabled for any network`);
 });
