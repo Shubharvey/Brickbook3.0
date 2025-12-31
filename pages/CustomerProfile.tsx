@@ -52,6 +52,9 @@ const CustomerProfile: React.FC = () => {
   const [walletSuccess, setWalletSuccess] = useState<boolean | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // API base URL - FIXED: Using the correct production backend URL
+  const API_BASE = "https://brickbook-backend.vercel.app/api";
+
   // --- Data Retrieval ---
   const customer = customers.find((c) => c.id === id);
 
@@ -167,7 +170,7 @@ const CustomerProfile: React.FC = () => {
     setIsCollectPaymentOpen(true);
   };
 
-  // Fixed: Handle payment submission
+  // Fixed: Handle payment submission with correct API URL
   const handleSubmitPayment = async () => {
     if (!paymentAmount || paymentAmount <= 0) {
       alert("Please enter a valid payment amount");
@@ -178,8 +181,9 @@ const CustomerProfile: React.FC = () => {
     setPaymentSuccess(null);
 
     try {
+      // FIXED: Using correct production backend URL
       const response = await fetch(
-        `http://localhost:3001/api/customers/${customer?.id}/collect-payment`,
+        `${API_BASE}/customers/${customer?.id}/collect-payment`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -222,7 +226,7 @@ const CustomerProfile: React.FC = () => {
     }
   };
 
-  // Fixed: Handle adding to wallet
+  // Fixed: Handle adding to wallet with correct API URL
   const handleAddToWallet = async () => {
     if (!walletAmount || walletAmount <= 0) {
       alert("Please enter a valid amount");
@@ -233,8 +237,9 @@ const CustomerProfile: React.FC = () => {
     setWalletSuccess(null);
 
     try {
+      // FIXED: Using correct production backend URL
       const response = await fetch(
-        `http://localhost:3001/api/customers/${customer?.id}/wallet`,
+        `${API_BASE}/customers/${customer?.id}/wallet`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
