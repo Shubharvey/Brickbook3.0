@@ -14,7 +14,7 @@ import {
   Delivery,
   DeliveryStatus,
 } from "../types";
-import { useAuth } from "./AuthContext"; // Import from your actual AuthContext
+import { useAuth } from "./AuthContext";
 
 interface StoreContextType {
   customers: Customer[];
@@ -49,41 +49,122 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Use the REAL AuthContext - THIS IS THE KEY CHANGE
-  const { user, isLoading: authLoading } = useAuth();
+  // Use the AuthContext
+  const { user, session, isLoading: authLoading } = useAuth();
 
   // API base URL
   const API_BASE = "https://brickbook-backend.vercel.app/api";
 
+  // Debug function to check token
+  const debugToken = () => {
+    try {
+      const token =
+        localStorage.getItem("supabase.auth.token") ||
+        sessionStorage.getItem("supabase.auth.token");
+
+      console.log("🔍 DEBUG - Token exists:", !!token);
+
+      if (token) {
+        const parsed = JSON.parse(token);
+        console.log("🔍 DEBUG - Parsed token:", {
+          hasAccessToken: !!parsed?.access_token,
+          hasSessionAccessToken: !!parsed?.session?.access_token,
+          hasCurrentSession: !!parsed?.currentSession?.access_token,
+          hasUser: !!parsed?.user,
+          tokenKeys: Object.keys(parsed || {}),
+        });
+
+        // Check all possible access token locations
+        const possibleTokens = [
+          parsed?.access_token,
+          parsed?.accessToken,
+          parsed?.session?.access_token,
+          parsed?.currentSession?.access_token,
+        ].filter(Boolean);
+
+        console.log(
+          "🔍 DEBUG - Possible access tokens found:",
+          possibleTokens.length
+        );
+      }
+    } catch (err) {
+      console.error("🔍 DEBUG - Error checking token:", err);
+    }
+  };
+
   // Helper function to get authentication headers
   const getAuthHeaders = async (): Promise<HeadersInit> => {
-    const token =
-      localStorage.getItem("supabase.auth.token") ||
-      sessionStorage.getItem("supabase.auth.token");
+    debugToken(); // Log token info
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
 
-    if (token) {
-      try {
-        const parsedToken = JSON.parse(token);
-        if (parsedToken?.access_token) {
-          headers["Authorization"] = `Bearer ${parsedToken.access_token}`;
+    try {
+      // Try to get token from localStorage first
+      let tokenString =
+        localStorage.getItem("supabase.auth.token") ||
+        sessionStorage.getItem("supabase.auth.token");
+
+      console.log(
+        "🔍 getAuthHeaders - Raw token string exists:",
+        !!tokenString
+      );
+
+      if (tokenString) {
+        const parsedToken = JSON.parse(tokenString);
+
+        // Try multiple possible token locations
+        const accessToken =
+          parsedToken?.access_token ||
+          parsedToken?.accessToken ||
+          parsedToken?.session?.access_token ||
+          parsedToken?.currentSession?.access_token;
+
+        if (accessToken) {
+          headers["Authorization"] = `Bearer ${accessToken}`;
+          console.log(
+            "🔍 getAuthHeaders - Added Authorization header with token"
+          );
+        } else {
+          console.warn(
+            "🔍 getAuthHeaders - No access_token found in parsed token:",
+            parsedToken
+          );
         }
-      } catch (err) {
-        headers["Authorization"] = `Bearer ${token}`;
+      } else {
+        console.warn(
+          "🔍 getAuthHeaders - No token found in localStorage/sessionStorage"
+        );
+
+        // Fallback: check if we have a session from AuthContext
+        if (session?.access_token) {
+          headers["Authorization"] = `Bearer ${session.access_token}`;
+          console.log(
+            "🔍 getAuthHeaders - Using token from AuthContext session"
+          );
+        }
       }
+    } catch (err) {
+      console.error("🔍 getAuthHeaders - Error parsing token:", err);
     }
 
+    console.log("🔍 getAuthHeaders - Final headers:", headers);
     return headers;
   };
 
   // Main function to fetch all data
   const fetchAllData = useCallback(async (): Promise<void> => {
+    console.log(
+      "🔄 fetchAllData called - User:",
+      user?.id,
+      "Auth loading:",
+      authLoading
+    );
+
     // Don't fetch if no user or auth is still loading
     if (!user || authLoading) {
-      console.log("No user or auth loading, skipping data fetch");
+      console.log("⏸️ No user or auth loading, skipping data fetch");
       return;
     }
 
@@ -91,20 +172,34 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     setError(null);
 
     try {
-      console.log("=== FETCHING DATA FOR USER:", user.id, "===");
+      console.log("🚀 FETCHING DATA FOR USER:", user.id, user.email);
       const headers = await getAuthHeaders();
 
-      // Fetch customers
-      console.log("Fetching customers...");
+      // Check if we have Authorization header
+      if (!headers["Authorization"]) {
+        console.error("❌ No Authorization header found!");
+        throw new Error("Authentication token missing. Please login again.");
+      }
+
+      console.log("📦 Fetching customers...");
       const customersResponse = await fetch(`${API_BASE}/customers`, {
         headers,
       });
+
+      console.log("📊 Customers response status:", customersResponse.status);
+
       if (!customersResponse.ok) {
+        if (customersResponse.status === 401) {
+          console.error("❌ 401 Unauthorized - Token may be invalid");
+          throw new Error("Authentication failed. Please login again.");
+        }
         throw new Error(
           `Failed to fetch customers: ${customersResponse.status}`
         );
       }
+
       const customersData = await customersResponse.json();
+      console.log(`✅ Received ${customersData.length} customers`);
 
       const transformedCustomers = customersData.map((customer: any) => ({
         id: customer.id.toString(),
@@ -120,16 +215,19 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       }));
 
       setCustomers(transformedCustomers);
-      console.log(`Set ${transformedCustomers.length} customers`);
+      console.log(`✅ Set ${transformedCustomers.length} customers in state`);
 
       // Fetch sales
-      console.log("Fetching sales...");
+      console.log("📦 Fetching sales...");
       const salesResponse = await fetch(`${API_BASE}/sales`, {
         headers,
       });
+
+      console.log("📊 Sales response status:", salesResponse.status);
+
       if (salesResponse.ok) {
         const salesData = await salesResponse.json();
-        console.log("Raw sales data from API:", salesData);
+        console.log(`✅ Received ${salesData.length} sales`);
 
         const transformedSales = salesData.map((sale: any) => {
           const items = sale.sale_items || [];
@@ -154,15 +252,19 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
           };
         });
         setSales(transformedSales);
-        console.log("Transformed sales:", transformedSales.length);
+        console.log("✅ Transformed sales:", transformedSales.length);
       } else {
-        console.warn("Failed to fetch sales, status:", salesResponse.status);
+        console.warn("⚠️ Failed to fetch sales, status:", salesResponse.status);
       }
 
       // Fetch expenses
+      console.log("📦 Fetching expenses...");
       const expensesResponse = await fetch(`${API_BASE}/expenses`, {
         headers,
       });
+
+      console.log("📊 Expenses response status:", expensesResponse.status);
+
       if (expensesResponse.ok) {
         const expensesData = await expensesResponse.json();
         setExpenses(
@@ -174,26 +276,41 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
             date: exp.expense_date.split("T")[0],
           }))
         );
+        console.log(`✅ Received ${expensesData.length} expenses`);
+      } else {
+        console.warn(
+          "⚠️ Failed to fetch expenses, status:",
+          expensesResponse.status
+        );
       }
 
       // Set empty arrays for other data types
       setProducts([]);
       setDeliveries([]);
+
+      console.log("🎉 Data fetch completed successfully!");
     } catch (err) {
+      console.error("❌ Error fetching data:", err);
       setError(err instanceof Error ? err.message : "Failed to fetch data");
-      console.error("Error fetching data:", err);
     } finally {
       setIsLoading(false);
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, session]);
 
   // Effect to fetch data when user changes
   useEffect(() => {
+    console.log(
+      "👤 Auth state changed - User:",
+      user?.id,
+      "Loading:",
+      authLoading
+    );
+
     if (user && !authLoading) {
-      console.log("User detected, fetching data...");
+      console.log("🔄 User detected, fetching data...");
       fetchAllData();
     } else if (!user && !authLoading) {
-      console.log("No user, clearing data...");
+      console.log("🚫 No user, clearing data...");
       // Clear all data when user logs out
       setCustomers([]);
       setSales([]);
@@ -206,24 +323,28 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
 
   // Refresh functions
   const refreshCustomers = async (): Promise<void> => {
+    console.log("🔄 Manual refresh customers");
     await fetchAllData();
   };
 
   const refreshExpenses = async (): Promise<void> => {
+    console.log("🔄 Manual refresh expenses");
     await fetchAllData();
   };
 
   const refreshSales = async (): Promise<void> => {
+    console.log("🔄 Manual refresh sales");
     await fetchAllData();
   };
 
   const refreshAllData = async (): Promise<void> => {
+    console.log("🔄 Manual refresh all data");
     await fetchAllData();
   };
 
   const addSale = async (sale: Sale): Promise<void> => {
     try {
-      console.log("Adding sale to backend and refreshing data...");
+      console.log("➕ Adding sale...");
 
       // The sale is already saved by the backend via the POST request in Sales.tsx
       // Just refresh the data from backend
@@ -232,15 +353,16 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       // Refresh customers to get updated wallet/dues
       await refreshCustomers();
 
-      console.log("Sale data refreshed successfully");
+      console.log("✅ Sale data refreshed successfully");
     } catch (err) {
-      console.error("Error in addSale:", err);
+      console.error("❌ Error in addSale:", err);
       throw err;
     }
   };
 
   const addCustomer = async (customer: Customer): Promise<Customer> => {
     try {
+      console.log("➕ Adding customer...");
       const headers = await getAuthHeaders();
       const response = await fetch(`${API_BASE}/customers`, {
         method: "POST",
@@ -259,9 +381,8 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       }
 
       const newCustomerData = await response.json();
-      console.log("Backend response for new customer:", newCustomerData);
+      console.log("✅ Backend response for new customer:", newCustomerData);
 
-      // Transform the backend customer data to match Customer type
       const backendCustomer: Customer = {
         id: newCustomerData.id.toString(),
         name: newCustomerData.name,
@@ -275,19 +396,19 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
           new Date().toISOString().split("T")[0],
       };
 
-      // Update local state with the transformed customer
       setCustomers((prev) => [backendCustomer, ...prev]);
+      console.log("✅ Customer added to state");
 
-      // Return the created customer so it can be used elsewhere
       return backendCustomer;
     } catch (err) {
-      console.error("Error adding customer:", err);
+      console.error("❌ Error adding customer:", err);
       throw err;
     }
   };
 
   const addExpense = async (expense: Expense): Promise<void> => {
     try {
+      console.log("➕ Adding expense...");
       const headers = await getAuthHeaders();
       const response = await fetch(`${API_BASE}/expenses`, {
         method: "POST",
@@ -308,7 +429,6 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
 
       const newExpenseData = await response.json();
 
-      // Update local state with the expense returned from API
       setExpenses((prev) => [
         {
           id: newExpenseData.id.toString(),
@@ -319,16 +439,16 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         },
         ...prev,
       ]);
+      console.log("✅ Expense added to state");
     } catch (err) {
-      console.error("Error adding expense:", err);
+      console.error("❌ Error adding expense:", err);
       throw err;
     }
   };
 
-  // Delete sale function
   const deleteSale = async (saleId: string): Promise<boolean> => {
     try {
-      console.log(`Attempting to delete sale with ID: ${saleId}`);
+      console.log(`🗑️ Deleting sale ${saleId}`);
       const headers = await getAuthHeaders();
 
       const response = await fetch(`${API_BASE}/sales/${saleId}`, {
@@ -343,28 +463,22 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         );
       }
 
-      const result = await response.json();
-      console.log("Delete sale response:", result);
-
-      // Remove the sale from local state
+      await response.json();
       setSales((prev) => prev.filter((sale) => sale.id !== saleId));
-
-      // Refresh customers to update wallet balances and dues
       await refreshCustomers();
 
-      console.log(`Sale ${saleId} deleted successfully`);
+      console.log(`✅ Sale ${saleId} deleted successfully`);
       return true;
     } catch (err) {
-      console.error("Error deleting sale:", err);
+      console.error("❌ Error deleting sale:", err);
       setError(err instanceof Error ? err.message : "Failed to delete sale");
       return false;
     }
   };
 
-  // Delete customer function
   const deleteCustomer = async (customerId: string): Promise<boolean> => {
     try {
-      console.log(`Attempting to delete customer with ID: ${customerId}`);
+      console.log(`🗑️ Deleting customer ${customerId}`);
       const headers = await getAuthHeaders();
 
       const response = await fetch(`${API_BASE}/customers/${customerId}`, {
@@ -379,19 +493,14 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         );
       }
 
-      const result = await response.json();
-      console.log("Delete customer response:", result);
-
-      // Remove customer from local state
+      await response.json();
       setCustomers((prev) => prev.filter((c) => c.id !== customerId));
-
-      // Also remove their sales from local state
       setSales((prev) => prev.filter((sale) => sale.customerId !== customerId));
 
-      console.log(`Customer ${customerId} deleted successfully`);
+      console.log(`✅ Customer ${customerId} deleted successfully`);
       return true;
     } catch (err) {
-      console.error("Error deleting customer:", err);
+      console.error("❌ Error deleting customer:", err);
       setError(
         err instanceof Error ? err.message : "Failed to delete customer"
       );
