@@ -1,18 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("Missing Supabase environment variables");
-  // Fallback for development
-  throw new Error(
-    "Missing Supabase environment variables. Check .env.local file."
-  );
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from "react";
 
 interface User {
   id: string;
@@ -28,40 +20,48 @@ interface AuthContextType {
   signUp: (
     email: string,
     password: string,
-    phone?: string,
-    fullName?: string
-  ) => Promise<any>;
-  signIn: (email: string, password: string) => Promise<any>;
+    full_name?: string
+  ) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
-  resetPassword: (email: string) => Promise<any>;
+  resetPassword: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Helper to get token from storage
+  const getTokenFromStorage = () => {
+    return (
+      localStorage.getItem("supabase.auth.token") ||
+      sessionStorage.getItem("supabase.auth.token")
+    );
+  };
+
+  // Initialize auth on mount
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        setSession(session);
+        const token = getTokenFromStorage();
 
-        if (session?.user) {
-          setUser({
-            id: session.user.id,
-            email: session.user.email!,
-            phone: session.user.phone || "",
-            full_name: session.user.user_metadata?.full_name || "",
-          });
-        } else {
-          setUser(null);
+        if (token) {
+          const parsed = JSON.parse(token);
+          setSession(parsed);
+
+          if (parsed?.user) {
+            setUser({
+              id: parsed.user.id,
+              email: parsed.user.email,
+              phone: parsed.user.phone || "",
+              full_name: parsed.user.user_metadata?.full_name || "",
+            });
+          }
         }
       } catch (error) {
         console.error("Auth initialization error:", error);
@@ -71,91 +71,204 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     };
 
     initializeAuth();
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-
-      if (session?.user) {
-        setUser({
-          id: session.user.id,
-          email: session.user.email!,
-          phone: session.user.phone || "",
-          full_name: session.user.user_metadata?.full_name || "",
-        });
-      } else {
-        setUser(null);
-      }
-      setIsLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
+  // Login function
+  const signIn = async (email: string, password: string) => {
+    try {
+      setIsLoading(true);
+      const response = await fetch(
+        "https://brickbook-backend.vercel.app/api/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Login failed");
+      }
+
+      const data = await response.json();
+
+      // Store the token in localStorage
+      const authData = {
+        access_token: data.access_token,
+        user: data.user,
+        session: data.session,
+      };
+
+      localStorage.setItem("supabase.auth.token", JSON.stringify(authData));
+
+      // Update state
+      setSession(authData);
+      setUser({
+        id: data.user.id,
+        email: data.user.email,
+        phone: data.user.phone || "",
+        full_name: data.user.user_metadata?.full_name || "",
+      });
+    } catch (err) {
+      console.error("Login error:", err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Signup function
   const signUp = async (
     email: string,
     password: string,
-    phone?: string,
-    fullName?: string
+    full_name?: string
   ) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      phone,
-      options: {
-        data: {
-          full_name: fullName || "",
-          phone: phone || "",
-        },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    try {
+      setIsLoading(true);
+      const response = await fetch(
+        "https://brickbook-backend.vercel.app/api/auth/signup",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, full_name }),
+        }
+      );
 
-    if (error) throw error;
-    return data;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Signup failed");
+      }
+
+      const data = await response.json();
+
+      // Store the token
+      const authData = {
+        access_token: data.access_token,
+        user: data.user,
+        session: data.session,
+      };
+
+      localStorage.setItem("supabase.auth.token", JSON.stringify(authData));
+
+      // Update state
+      setSession(authData);
+      setUser({
+        id: data.user.id,
+        email: data.user.email,
+        phone: data.user.phone || "",
+        full_name: data.user.user_metadata?.full_name || "",
+      });
+    } catch (err) {
+      console.error("Signup error:", err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) throw error;
-    return data;
-  };
-
+  // Logout function
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    try {
+      setIsLoading(true);
+      const token = getTokenFromStorage();
+
+      if (token) {
+        const parsed = JSON.parse(token);
+        if (parsed?.access_token) {
+          await fetch("https://brickbook-backend.vercel.app/api/auth/logout", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${parsed.access_token}`,
+              "Content-Type": "application/json",
+            },
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Logout API error:", err);
+    } finally {
+      // Always clear local state and storage
+      localStorage.removeItem("supabase.auth.token");
+      sessionStorage.removeItem("supabase.auth.token");
+      setUser(null);
+      setSession(null);
+      setIsLoading(false);
+    }
   };
 
+  // Reset password function
   const resetPassword = async (email: string) => {
-    const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
+    try {
+      setIsLoading(true);
+      const response = await fetch(
+        "https://brickbook-backend.vercel.app/api/auth/reset-password",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        }
+      );
 
-    if (error) throw error;
-    return data;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Password reset failed");
+      }
+    } catch (err) {
+      console.error("Reset password error:", err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        session,
-        isLoading,
-        signUp,
-        signIn,
-        signOut,
-        resetPassword,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  // Listen for storage changes (for cross-tab sync)
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "supabase.auth.token" || e.key === null) {
+        const token = getTokenFromStorage();
+
+        if (token) {
+          try {
+            const parsed = JSON.parse(token);
+            setSession(parsed);
+
+            if (parsed?.user) {
+              setUser({
+                id: parsed.user.id,
+                email: parsed.user.email,
+                phone: parsed.user.phone || "",
+                full_name: parsed.user.user_metadata?.full_name || "",
+              });
+            }
+          } catch (error) {
+            console.error("Error parsing token from storage event:", error);
+          }
+        } else {
+          setUser(null);
+          setSession(null);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, []);
+
+  const value = {
+    user,
+    session,
+    isLoading,
+    signUp,
+    signIn,
+    signOut,
+    resetPassword,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {

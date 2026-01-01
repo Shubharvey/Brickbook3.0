@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useStore } from "../context/Store";
 import { Mail, Lock, Eye, EyeOff } from "lucide-react";
 
 const Login: React.FC = () => {
@@ -11,6 +12,7 @@ const Login: React.FC = () => {
   const [error, setError] = useState("");
 
   const { signIn } = useAuth();
+  const { refreshAllData } = useStore();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,9 +21,17 @@ const Login: React.FC = () => {
     setError("");
 
     try {
+      // First, sign in the user
       await signIn(email, password);
+
+      // Then refresh all data for the newly logged-in user
+      console.log("Login successful, refreshing user data...");
+      await refreshAllData();
+
+      // Navigate to dashboard
       navigate("/dashboard");
     } catch (err: any) {
+      console.error("Login error:", err);
       setError(err.message || "Login failed. Please check your credentials.");
     } finally {
       setIsLoading(false);
