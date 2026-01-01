@@ -58,99 +58,115 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
   // Debug function to check token
   const debugToken = () => {
     try {
-      const token =
+      const tokenString =
         localStorage.getItem("supabase.auth.token") ||
-        sessionStorage.getItem("supabase.auth.token");
+        sessionStorage.getItem("supabase.auth.token") ||
+        localStorage.getItem("sb-access-token") ||
+        sessionStorage.getItem("sb-access-token") ||
+        localStorage.getItem("supabase-auth-token") ||
+        sessionStorage.getItem("supabase-auth-token");
 
-      console.log("🔍 DEBUG - Token exists:", !!token);
+      console.log("🔍 DEBUG - Token found in storage:", !!tokenString);
 
-      if (token) {
-        const parsed = JSON.parse(token);
-        console.log("🔍 DEBUG - Parsed token:", {
-          hasAccessToken: !!parsed?.access_token,
-          hasSessionAccessToken: !!parsed?.session?.access_token,
-          hasCurrentSession: !!parsed?.currentSession?.access_token,
-          hasUser: !!parsed?.user,
-          tokenKeys: Object.keys(parsed || {}),
-        });
+      if (tokenString) {
+        try {
+          const parsed = JSON.parse(tokenString);
+          console.log(
+            "🔍 DEBUG - Parsed token keys:",
+            Object.keys(parsed || {})
+          );
 
-        // Check all possible access token locations
-        const possibleTokens = [
-          parsed?.access_token,
-          parsed?.accessToken,
-          parsed?.session?.access_token,
-          parsed?.currentSession?.access_token,
-        ].filter(Boolean);
+          // Check all possible access token locations
+          const possibleTokens = [
+            parsed?.access_token,
+            parsed?.accessToken,
+            parsed?.session?.access_token,
+            parsed?.session?.accessToken,
+            parsed?.data?.access_token,
+            parsed?.currentSession?.access_token,
+          ].filter(Boolean);
 
-        console.log(
-          "🔍 DEBUG - Possible access tokens found:",
-          possibleTokens.length
-        );
+          console.log(
+            "🔍 DEBUG - Possible access tokens found:",
+            possibleTokens.length
+          );
+        } catch (e) {
+          console.log("🔍 DEBUG - Token is not JSON");
+        }
       }
     } catch (err) {
       console.error("🔍 DEBUG - Error checking token:", err);
     }
   };
 
-  // Helper function to get authentication headers
+  // UPDATED: Helper function to get authentication headers
   const getAuthHeaders = async (): Promise<HeadersInit> => {
-    debugToken(); // Log token info
-
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-    };
-
     try {
-      // Try to get token from localStorage first
+      // Try multiple possible storage locations
       let tokenString =
         localStorage.getItem("supabase.auth.token") ||
-        sessionStorage.getItem("supabase.auth.token");
+        sessionStorage.getItem("supabase.auth.token") ||
+        localStorage.getItem("sb-access-token") ||
+        sessionStorage.getItem("sb-access-token") ||
+        localStorage.getItem("supabase-auth-token") ||
+        sessionStorage.getItem("supabase-auth-token");
 
       console.log(
-        "🔍 getAuthHeaders - Raw token string exists:",
-        !!tokenString
+        "🔍 getAuthHeaders - Token found:",
+        tokenString ? "YES" : "NO"
       );
 
-      if (tokenString) {
-        const parsedToken = JSON.parse(tokenString);
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+      };
 
-        // Try multiple possible token locations
-        const accessToken =
-          parsedToken?.access_token ||
-          parsedToken?.accessToken ||
-          parsedToken?.session?.access_token ||
-          parsedToken?.currentSession?.access_token;
+      if (!tokenString) {
+        console.log("🔍 getAuthHeaders - No token found in any storage");
+        return headers;
+      }
 
-        if (accessToken) {
-          headers["Authorization"] = `Bearer ${accessToken}`;
-          console.log(
-            "🔍 getAuthHeaders - Added Authorization header with token"
-          );
-        } else {
-          console.warn(
-            "🔍 getAuthHeaders - No access_token found in parsed token:",
-            parsedToken
-          );
-        }
-      } else {
-        console.warn(
-          "🔍 getAuthHeaders - No token found in localStorage/sessionStorage"
+      try {
+        const parsed = JSON.parse(tokenString);
+
+        // Try multiple possible access token locations
+        let accessToken =
+          parsed?.access_token || // Your current format
+          parsed?.accessToken || // Alternative camelCase
+          parsed?.session?.access_token || // Nested in session
+          parsed?.session?.accessToken || // CamelCase in session
+          parsed?.data?.access_token || // Nested in data
+          tokenString; // Use raw if not JSON
+
+        console.log(
+          "🔍 getAuthHeaders - Extracted accessToken:",
+          accessToken ? "YES" : "NO",
+          accessToken?.substring(0, 20) + "..."
         );
 
-        // Fallback: check if we have a session from AuthContext
-        if (session?.access_token) {
-          headers["Authorization"] = `Bearer ${session.access_token}`;
+        if (accessToken && typeof accessToken === "string") {
+          headers["Authorization"] = `Bearer ${accessToken}`;
+          console.log("🔍 getAuthHeaders - Authorization header set");
+        } else {
           console.log(
-            "🔍 getAuthHeaders - Using token from AuthContext session"
+            "🔍 getAuthHeaders - No valid access token found in:",
+            Object.keys(parsed)
           );
         }
+      } catch (parseError) {
+        // If tokenString is not JSON, use it as the token itself
+        console.log(
+          "🔍 getAuthHeaders - Token is not JSON, using as raw token"
+        );
+        headers["Authorization"] = `Bearer ${tokenString}`;
       }
-    } catch (err) {
-      console.error("🔍 getAuthHeaders - Error parsing token:", err);
-    }
 
-    console.log("🔍 getAuthHeaders - Final headers:", headers);
-    return headers;
+      return headers;
+    } catch (error) {
+      console.error("🔍 getAuthHeaders - Unexpected error:", error);
+      return {
+        "Content-Type": "application/json",
+      };
+    }
   };
 
   // Main function to fetch all data

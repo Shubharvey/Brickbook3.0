@@ -105,13 +105,23 @@ app.options("*", cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ==================== AUTHENTICATION MIDDLEWARE ====================
+// ==================== UPDATED: AUTHENTICATION MIDDLEWARE ====================
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers["authorization"];
     const token = authHeader && authHeader.split(" ")[1];
 
+    // ADD THESE DEBUG LOGS:
+    console.log("🔍 AUTH DEBUG - Received Authorization header:", authHeader);
+    console.log(
+      "🔍 AUTH DEBUG - Extracted token:",
+      token ? token.substring(0, 20) + "..." : "NO TOKEN"
+    );
+    console.log("🔍 AUTH DEBUG - Request URL:", req.url);
+    console.log("🔍 AUTH DEBUG - Request method:", req.method);
+
     if (!token) {
+      console.log("🔍 AUTH DEBUG - No token provided");
       return res.status(401).json({ error: "Access token required" });
     }
 
@@ -122,15 +132,17 @@ const authenticateToken = async (req, res, next) => {
     } = await supabase.auth.getUser(token);
 
     if (error || !user) {
-      console.error("Token validation error:", error?.message);
+      console.error("🔍 AUTH DEBUG - Token validation error:", error?.message);
       return res.status(403).json({ error: "Invalid or expired token" });
     }
+
+    console.log("🔍 AUTH DEBUG - Token valid for user:", user.id, user.email);
 
     // Attach user to request object
     req.user = user;
     next();
   } catch (err) {
-    console.error("Auth middleware error:", err);
+    console.error("🔍 AUTH DEBUG - Auth middleware error:", err);
     res.status(500).json({ error: "Authentication failed" });
   }
 };
