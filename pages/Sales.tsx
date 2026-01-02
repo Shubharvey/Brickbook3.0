@@ -76,7 +76,7 @@ interface PaymentRow {
 }
 
 const Sales: React.FC = () => {
-  const { customers, addSale, addCustomer } = useStore();
+  const { customers, addSale, addCustomer, getAuthHeaders } = useStore(); // ADD getAuthHeaders here
 
   // --- View State ---
   const [view, setView] = useState<ViewMode>("single");
@@ -259,7 +259,6 @@ const Sales: React.FC = () => {
   };
 
   // --- SUBMIT HANDLER: SINGLE ---
-  // --- SUBMIT HANDLER: SINGLE ---
   const handleSingleSubmit = async () => {
     if (!selectedCustomerId || cartItems.length === 0) {
       alert("Please select a customer and add items to the cart.");
@@ -325,18 +324,26 @@ const Sales: React.FC = () => {
         dueDate: dueDate || null,
       };
 
+      // USE getAuthHeaders HERE
+      const headers = await getAuthHeaders();
+
+      console.log("🔍 Sending sale with headers:", headers);
+
       const response = await fetch(
         "https://brickbook-backend.vercel.app/api/sales",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify(saleData),
         }
       );
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("Authentication failed. Please login again.");
+        }
         const errorText = await response.text();
-        throw new Error(errorText);
+        throw new Error(errorText || "Failed to save sale");
       }
 
       const savedSale = await response.json();
@@ -362,6 +369,7 @@ const Sales: React.FC = () => {
 
       alert("✅ Sale saved successfully");
     } catch (error: any) {
+      console.error("❌ Sale submission error:", error);
       alert(`❌ Error: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -421,6 +429,9 @@ const Sales: React.FC = () => {
         return;
       }
 
+      // USE getAuthHeaders HERE TOO
+      const headers = await getAuthHeaders();
+
       for (const row of validRows) {
         const originalId = `BULK-${Date.now()}-${Math.random()
           .toString(36)
@@ -448,13 +459,19 @@ const Sales: React.FC = () => {
           paymentType: "Credit",
         };
 
-        const response = await fetch("http://localhost:3001/api/sales", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(saleData),
-        });
+        const response = await fetch(
+          "https://brickbook-backend.vercel.app/api/sales",
+          {
+            method: "POST",
+            headers: headers,
+            body: JSON.stringify(saleData),
+          }
+        );
 
         if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error("Authentication failed. Please login again.");
+          }
           const errorText = await response.text();
           throw new Error(`Bulk save failed: ${errorText}`);
         }
@@ -505,6 +522,7 @@ const Sales: React.FC = () => {
         },
       ]);
     } catch (error: any) {
+      console.error("❌ Bulk submission error:", error);
       alert(`Error: ${error.message}`);
     } finally {
       setIsLoading(false);

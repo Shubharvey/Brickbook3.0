@@ -34,6 +34,7 @@ interface StoreContextType {
   refreshExpenses: () => Promise<void>;
   refreshSales: () => Promise<void>;
   refreshAllData: () => Promise<void>;
+  getAuthHeaders: () => Promise<HeadersInit>;
 }
 
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
@@ -99,7 +100,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // UPDATED: Helper function to get authentication headers
+  // Helper function to get authentication headers
   const getAuthHeaders = async (): Promise<HeadersInit> => {
     try {
       // Try multiple possible storage locations
@@ -548,6 +549,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     refreshExpenses,
     refreshSales,
     refreshAllData,
+    getAuthHeaders,
   };
 
   return (
