@@ -31,8 +31,14 @@ import {
 const CustomerProfile: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { customers, sales, deliveries, deleteSale, refreshCustomers } =
-    useStore();
+  const {
+    customers,
+    sales,
+    deliveries,
+    deleteSale,
+    refreshCustomers,
+    getAuthHeaders,
+  } = useStore();
   const [activeTab, setActiveTab] = useState("overview");
   const [isEditMode, setIsEditMode] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -181,12 +187,15 @@ const CustomerProfile: React.FC = () => {
     setPaymentSuccess(null);
 
     try {
+      // Get headers from useStore
+      const headers = await getAuthHeaders();
+
       // FIXED: Using correct production backend URL
       const response = await fetch(
         `${API_BASE}/customers/${customer?.id}/collect-payment`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers, // Use the headers with Authorization
           body: JSON.stringify({
             amount: paymentAmount,
             paymentMode: "cash",
@@ -237,12 +246,15 @@ const CustomerProfile: React.FC = () => {
     setWalletSuccess(null);
 
     try {
+      // Get headers from useStore
+      const headers = await getAuthHeaders();
+
       // FIXED: Using correct production backend URL
       const response = await fetch(
         `${API_BASE}/customers/${customer?.id}/wallet`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers, // Use the headers with Authorization
           body: JSON.stringify({
             amount: walletAmount,
             type: "credit",
