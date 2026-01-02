@@ -588,6 +588,21 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     try {
       console.log("➕ Adding customer...");
       const headers = await getAuthHeaders();
+
+      // Check if we have Authorization header
+      if (!headers["Authorization"]) {
+        console.error("❌ No Authorization header found!");
+        throw new Error("Authentication token missing. Please login again.");
+      }
+
+      console.log("🔍 Sending customer data:", {
+        name: customer.name,
+        phone: customer.phone || "",
+        email: "",
+        address: customer.address || "",
+        type: customer.type,
+      });
+
       const response = await fetch(`${API_BASE}/customers`, {
         method: "POST",
         headers,
@@ -596,12 +611,39 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
           phone: customer.phone || "",
           email: "",
           address: customer.address || "",
+          type: customer.type || "Regular",
         }),
       });
 
+      console.log("📊 Customer creation response status:", response.status);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to create customer");
+        if (response.status === 401) {
+          console.error("❌ 401 Unauthorized - Token may be invalid");
+          throw new Error("Authentication failed. Please login again.");
+        } else if (response.status === 403) {
+          console.error("❌ 403 Forbidden - Insufficient permissions");
+          throw new Error("You don't have permission to create customers.");
+        }
+
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (e) {
+          // If response is not JSON, use status text
+          throw new Error(
+            `Failed to create customer: ${
+              response.statusText || response.status
+            }`
+          );
+        }
+
+        console.error("❌ Backend error:", errorData);
+        throw new Error(
+          errorData.error ||
+            errorData.message ||
+            `Failed to create customer: ${response.status}`
+        );
       }
 
       const newCustomerData = await response.json();

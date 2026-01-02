@@ -49,6 +49,7 @@ const Customers: React.FC = () => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
 
   // --- Filter State ---
   const [searchQuery, setSearchQuery] = useState("");
@@ -228,23 +229,29 @@ const Customers: React.FC = () => {
   };
 
   const handleSaveNewCustomer = async () => {
-    if (!newCustomer.name || !newCustomer.phone) return;
+    if (!newCustomer.name || !newCustomer.phone) {
+      alert("Please fill in all required fields");
+      return;
+    }
 
-    // Map UI types to System types
-    const systemType = newCustomer.type === "Individual" ? "Regular" : "VIP";
-
-    const customer: Customer = {
-      id: "", // Will be set by backend
-      name: newCustomer.name,
-      phone: newCustomer.phone,
-      address: newCustomer.address,
-      type: systemType,
-      walletBalance: 0,
-      totalDues: 0,
-      lastActive: new Date().toISOString().split("T")[0],
-    };
-
+    setIsCreatingCustomer(true);
     try {
+      // Map UI types to System types
+      const systemType = newCustomer.type === "Individual" ? "Regular" : "VIP";
+
+      const customer: Customer = {
+        id: "", // Will be set by backend
+        name: newCustomer.name,
+        phone: newCustomer.phone,
+        address: newCustomer.address,
+        type: systemType,
+        walletBalance: 0,
+        totalDues: 0,
+        lastActive: new Date().toISOString().split("T")[0],
+      };
+
+      console.log("🔍 Creating customer with data:", customer);
+
       const savedCustomer = await addCustomer(customer);
 
       // Refresh the list
@@ -253,10 +260,16 @@ const Customers: React.FC = () => {
       setIsAddCustomerOpen(false);
       setNewCustomer({ name: "", phone: "", address: "", type: "Individual" });
 
-      console.log("New customer saved:", savedCustomer);
+      console.log("✅ New customer saved:", savedCustomer);
+      alert("Customer created successfully!");
     } catch (error) {
-      console.error("Failed to save customer:", error);
-      alert("Failed to save customer. Please try again.");
+      console.error("❌ Failed to save customer:", error);
+      // Show more specific error message
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error occurred";
+      alert(`Failed to save customer: ${errorMessage}`);
+    } finally {
+      setIsCreatingCustomer(false);
     }
   };
 
@@ -620,10 +633,19 @@ const Customers: React.FC = () => {
             <div className="mt-8 flex justify-end">
               <button
                 onClick={handleSaveNewCustomer}
-                disabled={!newCustomer.name || !newCustomer.phone}
-                className="bg-brand-500 hover:bg-brand-600 text-slate-900 font-bold py-3 px-8 rounded-xl shadow-lg shadow-brand-500/20 transition-all active:scale-95 w-full md:w-auto disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={
+                  !newCustomer.name || !newCustomer.phone || isCreatingCustomer
+                }
+                className="bg-brand-500 hover:bg-brand-600 text-slate-900 font-bold py-3 px-8 rounded-xl shadow-lg shadow-brand-500/20 transition-all active:scale-95 w-full md:w-auto disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Save Customer
+                {isCreatingCustomer ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Creating Customer...
+                  </>
+                ) : (
+                  "Save Customer"
+                )}
               </button>
             </div>
           </div>

@@ -11,6 +11,8 @@ interface User {
   email: string;
   phone?: string;
   full_name?: string;
+  role?: string;
+  permissions?: string[];
 }
 
 interface AuthContextType {
@@ -25,6 +27,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  checkPermissions: () => Promise<any>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -55,11 +58,35 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
           setSession(parsed);
 
           if (parsed?.user) {
+            // Extract role and permissions from various possible locations
+            const role =
+              parsed.user.role ||
+              parsed.user.user_metadata?.role ||
+              parsed.user.app_metadata?.role ||
+              "user";
+
+            const permissions =
+              parsed.user.permissions ||
+              parsed.user.user_metadata?.permissions ||
+              parsed.user.app_metadata?.permissions ||
+              [];
+
+            console.log("🔍 DEBUG - Initializing user with data:", {
+              id: parsed.user.id,
+              email: parsed.user.email,
+              role,
+              permissions,
+              user_metadata: parsed.user.user_metadata,
+              app_metadata: parsed.user.app_metadata,
+            });
+
             setUser({
               id: parsed.user.id,
               email: parsed.user.email,
               phone: parsed.user.phone || "",
               full_name: parsed.user.user_metadata?.full_name || "",
+              role,
+              permissions,
             });
           }
         }
@@ -75,6 +102,71 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
     initializeAuth();
   }, []);
+
+  // Check user permissions
+  const checkPermissions = async () => {
+    try {
+      const token = getTokenFromStorage();
+      if (!token) {
+        console.log("🔍 No token found for permission check");
+        return null;
+      }
+
+      const parsed = JSON.parse(token);
+      if (!parsed?.access_token) {
+        console.log("🔍 No access token found for permission check");
+        return null;
+      }
+
+      const response = await fetch(
+        "https://brickbook-backend.vercel.app/api/auth/me",
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${parsed.access_token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        console.log("🔍 Permission check failed with status:", response.status);
+        return null;
+      }
+
+      const userData = await response.json();
+      console.log("🔍 Current user data from /api/auth/me:", userData);
+
+      // Update user state with fresh data
+      if (userData.user) {
+        const role =
+          userData.user.role ||
+          userData.user.user_metadata?.role ||
+          userData.user.app_metadata?.role ||
+          "user";
+
+        const permissions =
+          userData.user.permissions ||
+          userData.user.user_metadata?.permissions ||
+          userData.user.app_metadata?.permissions ||
+          [];
+
+        setUser({
+          id: userData.user.id,
+          email: userData.user.email,
+          phone: userData.user.phone || "",
+          full_name: userData.user.user_metadata?.full_name || "",
+          role,
+          permissions,
+        });
+      }
+
+      return userData;
+    } catch (error) {
+      console.error("Error checking permissions:", error);
+      return null;
+    }
+  };
 
   // Login function
   const signIn = async (email: string, password: string) => {
@@ -95,6 +187,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       }
 
       const data = await response.json();
+      console.log("🔍 Login response data:", data);
+
+      // Extract role and permissions from various possible locations
+      const role =
+        data.user.role ||
+        data.user.user_metadata?.role ||
+        data.user.app_metadata?.role ||
+        "user";
+
+      const permissions =
+        data.user.permissions ||
+        data.user.user_metadata?.permissions ||
+        data.user.app_metadata?.permissions ||
+        [];
+
+      console.log("🔍 User logged in with:", {
+        id: data.user.id,
+        email: data.user.email,
+        role,
+        permissions,
+        user_metadata: data.user.user_metadata,
+        app_metadata: data.user.app_metadata,
+      });
 
       // Store the token in localStorage
       const authData = {
@@ -112,7 +227,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         email: data.user.email,
         phone: data.user.phone || "",
         full_name: data.user.user_metadata?.full_name || "",
+        role,
+        permissions,
       });
+
+      // Check permissions after login
+      await checkPermissions();
     } catch (err) {
       console.error("Login error:", err);
       throw err;
@@ -144,6 +264,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       }
 
       const data = await response.json();
+      console.log("🔍 Signup response data:", data);
+
+      // Extract role and permissions
+      const role =
+        data.user.role ||
+        data.user.user_metadata?.role ||
+        data.user.app_metadata?.role ||
+        "user";
+
+      const permissions =
+        data.user.permissions ||
+        data.user.user_metadata?.permissions ||
+        data.user.app_metadata?.permissions ||
+        [];
 
       // Store the token
       const authData = {
@@ -161,7 +295,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         email: data.user.email,
         phone: data.user.phone || "",
         full_name: data.user.user_metadata?.full_name || "",
+        role,
+        permissions,
       });
+
+      // Check permissions after signup
+      await checkPermissions();
     } catch (err) {
       console.error("Signup error:", err);
       throw err;
@@ -244,11 +383,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
             setSession(parsed);
 
             if (parsed?.user) {
+              // Extract role and permissions
+              const role =
+                parsed.user.role ||
+                parsed.user.user_metadata?.role ||
+                parsed.user.app_metadata?.role ||
+                "user";
+
+              const permissions =
+                parsed.user.permissions ||
+                parsed.user.user_metadata?.permissions ||
+                parsed.user.app_metadata?.permissions ||
+                [];
+
               setUser({
                 id: parsed.user.id,
                 email: parsed.user.email,
                 phone: parsed.user.phone || "",
                 full_name: parsed.user.user_metadata?.full_name || "",
+                role,
+                permissions,
               });
             }
           } catch (error) {
@@ -270,6 +424,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     };
   }, []);
 
+  // Check permissions when user changes
+  useEffect(() => {
+    if (user && !isLoading) {
+      checkPermissions();
+    }
+  }, [user?.id]);
+
   const value = {
     user,
     session,
@@ -278,6 +439,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     signIn,
     signOut,
     resetPassword,
+    checkPermissions,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
