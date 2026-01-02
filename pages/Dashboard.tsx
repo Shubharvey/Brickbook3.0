@@ -28,10 +28,8 @@ const Dashboard: React.FC = () => {
   const { sales, customers, products, deliveries, expenses, isLoading, error } =
     useStore();
 
-  // Add loading state
+  // Add loading state - initialize to true and set to false after initial load
   const [isDashboardLoading, setIsDashboardLoading] = React.useState(true);
-
-  // Add error state
   const [dashboardError, setDashboardError] = React.useState<string | null>(
     null
   );
@@ -39,7 +37,8 @@ const Dashboard: React.FC = () => {
   // Process data safely with error handling
   const totalRevenue = React.useMemo(() => {
     try {
-      return sales.reduce((acc, sale) => acc + (sale.totalAmount || 0), 0);
+      if (!Array.isArray(sales)) return 0;
+      return sales.reduce((acc, sale) => acc + (sale?.totalAmount || 0), 0);
     } catch (err) {
       console.error("Error calculating totalRevenue:", err);
       return 0;
@@ -48,7 +47,8 @@ const Dashboard: React.FC = () => {
 
   const totalExpenses = React.useMemo(() => {
     try {
-      return expenses.reduce((acc, exp) => acc + (exp.amount || 0), 0);
+      if (!Array.isArray(expenses)) return 0;
+      return expenses.reduce((acc, exp) => acc + (exp?.amount || 0), 0);
     } catch (err) {
       console.error("Error calculating totalExpenses:", err);
       return 0;
@@ -62,6 +62,7 @@ const Dashboard: React.FC = () => {
 
   const pendingDeliveries = React.useMemo(() => {
     try {
+      if (!Array.isArray(deliveries)) return 0;
       return deliveries.filter((d) => d?.status !== "Delivered").length;
     } catch (err) {
       console.error("Error calculating pendingDeliveries:", err);
@@ -71,6 +72,7 @@ const Dashboard: React.FC = () => {
 
   const lowStockItems = React.useMemo(() => {
     try {
+      if (!Array.isArray(products)) return 0;
       return products.filter((p) => (p?.stock || 0) < 1000).length;
     } catch (err) {
       console.error("Error calculating lowStockItems:", err);
@@ -80,6 +82,7 @@ const Dashboard: React.FC = () => {
 
   const totalDues = React.useMemo(() => {
     try {
+      if (!Array.isArray(customers)) return 0;
       return customers.reduce((acc, c) => acc + (c?.totalDues || 0), 0);
     } catch (err) {
       console.error("Error calculating totalDues:", err);
@@ -89,6 +92,7 @@ const Dashboard: React.FC = () => {
 
   const totalWallet = React.useMemo(() => {
     try {
+      if (!Array.isArray(customers)) return 0;
       return customers.reduce((acc, c) => acc + (c?.walletBalance || 0), 0);
     } catch (err) {
       console.error("Error calculating totalWallet:", err);
@@ -100,6 +104,7 @@ const Dashboard: React.FC = () => {
 
   const recentSales = React.useMemo(() => {
     try {
+      if (!Array.isArray(sales)) return [];
       return sales.slice(0, 5).filter((sale) => sale?.id && sale?.customerName);
     } catch (err) {
       console.error("Error processing recentSales:", err);
@@ -110,9 +115,13 @@ const Dashboard: React.FC = () => {
   // Process sales data for chart with error handling
   const processSalesData = React.useCallback(() => {
     try {
-      console.log("Processing sales data for chart...", sales.length, "sales");
+      console.log(
+        "Processing sales data for chart...",
+        sales?.length || 0,
+        "sales"
+      );
 
-      if (!sales || sales.length === 0) {
+      if (!sales || !Array.isArray(sales) || sales.length === 0) {
         console.log("No sales data available, returning empty chart");
         return [];
       }
@@ -163,24 +172,23 @@ const Dashboard: React.FC = () => {
     }
   }, [sales]);
 
-  // Get actual sales data for the chart
+  // Get chart data - MOVED THE SETSTATE OUTSIDE USEMEMO
   const chartData = React.useMemo(() => {
-    const data = processSalesData();
-    setIsDashboardLoading(false);
-    return data;
+    return processSalesData();
   }, [processSalesData]);
 
   // Mobile Weekly Performance Data
   const weeklyData = React.useMemo(() => {
     try {
+      if (!Array.isArray(chartData)) return [];
       return chartData.map((d) => ({
-        day: d.name?.charAt(0) || "N",
+        day: d?.name?.charAt(0) || "N",
         val:
-          d.sales > 0
+          d?.sales > 0
             ? Math.min(
                 100,
                 (d.sales /
-                  Math.max(...chartData.map((item) => item.sales || 1))) *
+                  Math.max(...chartData.map((item) => item?.sales || 1))) *
                   100
               )
             : 0,
@@ -190,6 +198,17 @@ const Dashboard: React.FC = () => {
       return [];
     }
   }, [chartData]);
+
+  // Set loading to false when data is ready
+  React.useEffect(() => {
+    if (!isLoading) {
+      // Add a small delay to prevent flickering
+      const timer = setTimeout(() => {
+        setIsDashboardLoading(false);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading]);
 
   // Show loading state
   if (isDashboardLoading || isLoading) {
@@ -283,7 +302,7 @@ const Dashboard: React.FC = () => {
               </select>
             </div>
 
-            {chartData.length > 0 ? (
+            {Array.isArray(chartData) && chartData.length > 0 ? (
               <>
                 <div className="h-72 w-full">
                   <ResponsiveContainer width="100%" height="100%">
@@ -318,9 +337,10 @@ const Dashboard: React.FC = () => {
                         itemStyle={{ color: "#f1f5f9" }}
                         cursor={{ fill: "#334155", opacity: 0.4 }}
                         formatter={(value: any) => [
-                          `₹${(value.sales || 0).toLocaleString()}`,
-                          value.date || "Unknown date",
+                          `₹${(value || 0).toLocaleString()}`,
+                          "Sales",
                         ]}
+                        labelFormatter={(label) => `Date: ${label}`}
                       />
                       <Bar dataKey="sales" radius={[4, 4, 0, 0]}>
                         {chartData.map((entry, index) => (
@@ -336,7 +356,7 @@ const Dashboard: React.FC = () => {
                   </ResponsiveContainer>
                 </div>
                 <div className="mt-4 text-xs text-slate-500 text-center">
-                  {sales.length > 0
+                  {sales && sales.length > 0
                     ? `Showing data for ${
                         chartData.filter((d) => (d?.sales || 0) > 0).length
                       } days with sales`
@@ -361,7 +381,7 @@ const Dashboard: React.FC = () => {
               Recent Sales
             </h2>
             <div className="space-y-4">
-              {recentSales.length === 0 ? (
+              {!Array.isArray(recentSales) || recentSales.length === 0 ? (
                 <p className="text-slate-500 text-center py-8">
                   No recent sales found.
                 </p>
@@ -382,8 +402,8 @@ const Dashboard: React.FC = () => {
                           {sale?.customerName || "Unknown Customer"}
                         </p>
                         <p className="text-xs text-slate-500">
-                          {sale?.items?.length || 0} items •{" "}
-                          {sale?.date || "No date"}
+                          {Array.isArray(sale?.items) ? sale.items.length : 0}{" "}
+                          items • {sale?.date || "No date"}
                         </p>
                       </div>
                     </div>
@@ -484,7 +504,7 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 h-32 flex items-end justify-between gap-2">
-            {weeklyData.length > 0 ? (
+            {Array.isArray(weeklyData) && weeklyData.length > 0 ? (
               weeklyData.map((d, i) => (
                 <div
                   key={i}
@@ -493,10 +513,12 @@ const Dashboard: React.FC = () => {
                   <div className="w-2 bg-brand-500/20 rounded-t-sm h-full relative group">
                     <div
                       className="absolute bottom-0 left-0 w-full bg-brand-500 rounded-t-sm transition-all duration-500"
-                      style={{ height: `${d.val}%` }}
+                      style={{ height: `${d?.val || 0}%` }}
                     ></div>
                   </div>
-                  <span className="text-[10px] text-slate-500">{d.day}</span>
+                  <span className="text-[10px] text-slate-500">
+                    {d?.day || "N"}
+                  </span>
                 </div>
               ))
             ) : (

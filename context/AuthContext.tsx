@@ -65,6 +65,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         }
       } catch (error) {
         console.error("Auth initialization error:", error);
+        // Clear invalid token
+        localStorage.removeItem("supabase.auth.token");
+        sessionStorage.removeItem("supabase.auth.token");
       } finally {
         setIsLoading(false);
       }
@@ -174,15 +177,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       const token = getTokenFromStorage();
 
       if (token) {
-        const parsed = JSON.parse(token);
-        if (parsed?.access_token) {
-          await fetch("https://brickbook-backend.vercel.app/api/auth/logout", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${parsed.access_token}`,
-              "Content-Type": "application/json",
-            },
-          });
+        try {
+          const parsed = JSON.parse(token);
+          if (parsed?.access_token) {
+            await fetch(
+              "https://brickbook-backend.vercel.app/api/auth/logout",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${parsed.access_token}`,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+          }
+        } catch (err) {
+          console.error("Error parsing token during logout:", err);
         }
       }
     } catch (err) {
@@ -243,6 +253,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
             }
           } catch (error) {
             console.error("Error parsing token from storage event:", error);
+            setUser(null);
+            setSession(null);
           }
         } else {
           setUser(null);

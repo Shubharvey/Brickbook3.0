@@ -56,6 +56,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
   // API base URL
   const API_BASE = "https://brickbook-backend.vercel.app/api";
 
+  // Track if we've already fetched data to prevent infinite loops
+  const [hasFetchedData, setHasFetchedData] = useState(false);
+
   // Debug function to check token
   const debugToken = () => {
     try {
@@ -103,7 +106,16 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
   // Helper function to get authentication headers
   const getAuthHeaders = async (): Promise<HeadersInit> => {
     try {
-      // Try multiple possible storage locations
+      // Try to get the session directly from AuthContext first
+      if (session?.access_token) {
+        console.log("🔍 getAuthHeaders - Using session from AuthContext");
+        return {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        };
+      }
+
+      // Fallback to storage
       let tokenString =
         localStorage.getItem("supabase.auth.token") ||
         sessionStorage.getItem("supabase.auth.token") ||
@@ -170,26 +182,10 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     }
   };
 
-  // Main function to fetch all data
-  const fetchAllData = useCallback(async (): Promise<void> => {
-    console.log(
-      "🔄 fetchAllData called - User:",
-      user?.id,
-      "Auth loading:",
-      authLoading
-    );
-
-    // Don't fetch if no user or auth is still loading
-    if (!user || authLoading) {
-      console.log("⏸️ No user or auth loading, skipping data fetch");
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
+  // Fetch customers with proper error handling
+  const fetchCustomers = useCallback(async (): Promise<void> => {
     try {
-      console.log("🚀 FETCHING DATA FOR USER:", user.id, user.email);
+      console.log("📦 Fetching customers...");
       const headers = await getAuthHeaders();
 
       // Check if we have Authorization header
@@ -198,7 +194,6 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         throw new Error("Authentication token missing. Please login again.");
       }
 
-      console.log("📦 Fetching customers...");
       const customersResponse = await fetch(`${API_BASE}/customers`, {
         headers,
       });
@@ -209,6 +204,9 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         if (customersResponse.status === 401) {
           console.error("❌ 401 Unauthorized - Token may be invalid");
           throw new Error("Authentication failed. Please login again.");
+        } else if (customersResponse.status === 403) {
+          console.error("❌ 403 Forbidden - Insufficient permissions");
+          throw new Error("You don't have permission to access this resource.");
         }
         throw new Error(
           `Failed to fetch customers: ${customersResponse.status}`
@@ -218,34 +216,67 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       const customersData = await customersResponse.json();
       console.log(`✅ Received ${customersData.length} customers`);
 
-      const transformedCustomers = customersData.map((customer: any) => ({
-        id: customer.id.toString(),
-        name: customer.name || "Unknown",
-        phone: customer.phone || "",
-        address: customer.address || "",
-        type: customer.type || "Regular",
-        walletBalance: customer.wallet_balance || 0,
-        totalDues: customer.outstanding_balance || 0,
-        lastActive:
-          customer.created_at?.split("T")[0] ||
-          new Date().toISOString().split("T")[0],
-      }));
+      // Check if data is an array before mapping
+      if (Array.isArray(customersData)) {
+        const transformedCustomers = customersData.map((customer: any) => ({
+          id: customer.id.toString(),
+          name: customer.name || "Unknown",
+          phone: customer.phone || "",
+          address: customer.address || "",
+          type: customer.type || "Regular",
+          walletBalance: customer.wallet_balance || 0,
+          totalDues: customer.outstanding_balance || 0,
+          lastActive:
+            customer.created_at?.split("T")[0] ||
+            new Date().toISOString().split("T")[0],
+        }));
 
-      setCustomers(transformedCustomers);
-      console.log(`✅ Set ${transformedCustomers.length} customers in state`);
+        setCustomers(transformedCustomers);
+        console.log(`✅ Set ${transformedCustomers.length} customers in state`);
+      } else {
+        console.error("Expected array but received:", customersData);
+        setCustomers([]);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching customers:", err);
+      throw err;
+    }
+  }, [getAuthHeaders]);
 
-      // Fetch sales
+  // Fetch sales with proper error handling
+  const fetchSales = useCallback(async (): Promise<void> => {
+    try {
       console.log("📦 Fetching sales...");
+      const headers = await getAuthHeaders();
+
+      // Check if we have Authorization header
+      if (!headers["Authorization"]) {
+        console.error("❌ No Authorization header found!");
+        throw new Error("Authentication token missing. Please login again.");
+      }
+
       const salesResponse = await fetch(`${API_BASE}/sales`, {
         headers,
       });
 
       console.log("📊 Sales response status:", salesResponse.status);
 
-      if (salesResponse.ok) {
-        const salesData = await salesResponse.json();
-        console.log(`✅ Received ${salesData.length} sales`);
+      if (!salesResponse.ok) {
+        if (salesResponse.status === 401) {
+          console.error("❌ 401 Unauthorized - Token may be invalid");
+          throw new Error("Authentication failed. Please login again.");
+        } else if (salesResponse.status === 403) {
+          console.error("❌ 403 Forbidden - Insufficient permissions");
+          throw new Error("You don't have permission to access this resource.");
+        }
+        throw new Error(`Failed to fetch sales: ${salesResponse.status}`);
+      }
 
+      const salesData = await salesResponse.json();
+      console.log(`✅ Received ${salesData.length} sales`);
+
+      // Check if data is an array before mapping
+      if (Array.isArray(salesData)) {
         const transformedSales = salesData.map((sale: any) => {
           const items = sale.sale_items || [];
           return {
@@ -271,19 +302,57 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
         setSales(transformedSales);
         console.log("✅ Transformed sales:", transformedSales.length);
       } else {
-        console.warn("⚠️ Failed to fetch sales, status:", salesResponse.status);
+        console.error("Expected array but received:", salesData);
+        setSales([]);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching sales:", err);
+      throw err;
+    }
+  }, [getAuthHeaders]);
+
+  // Fetch expenses with proper error handling
+  const fetchExpenses = useCallback(async (): Promise<void> => {
+    try {
+      console.log("📦 Fetching expenses...");
+      const headers = await getAuthHeaders();
+
+      // Check if we have Authorization header
+      if (!headers["Authorization"]) {
+        console.error("❌ No Authorization header found!");
+        throw new Error("Authentication token missing. Please login again.");
       }
 
-      // Fetch expenses
-      console.log("📦 Fetching expenses...");
       const expensesResponse = await fetch(`${API_BASE}/expenses`, {
         headers,
       });
 
       console.log("📊 Expenses response status:", expensesResponse.status);
 
-      if (expensesResponse.ok) {
-        const expensesData = await expensesResponse.json();
+      if (!expensesResponse.ok) {
+        if (expensesResponse.status === 401) {
+          console.error("❌ 401 Unauthorized - Token may be invalid");
+          throw new Error("Authentication failed. Please login again.");
+        } else if (expensesResponse.status === 403) {
+          console.error("❌ 403 Forbidden - Insufficient permissions");
+          throw new Error("You don't have permission to access this resource.");
+        } else if (expensesResponse.status === 500) {
+          console.error("❌ 500 Internal Server Error - Backend issue");
+          // Don't throw error for 500, just set empty expenses and log warning
+          console.warn(
+            "⚠️ Backend error with expenses endpoint, continuing without expenses"
+          );
+          setExpenses([]);
+          return;
+        }
+        throw new Error(`Failed to fetch expenses: ${expensesResponse.status}`);
+      }
+
+      const expensesData = await expensesResponse.json();
+      console.log(`✅ Received ${expensesData.length} expenses`);
+
+      // Check if data is an array before mapping
+      if (Array.isArray(expensesData)) {
         setExpenses(
           expensesData.map((exp: any) => ({
             id: exp.id.toString(),
@@ -293,17 +362,125 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
             date: exp.expense_date.split("T")[0],
           }))
         );
-        console.log(`✅ Received ${expensesData.length} expenses`);
+        console.log(`✅ Set ${expensesData.length} expenses in state`);
       } else {
-        console.warn(
-          "⚠️ Failed to fetch expenses, status:",
-          expensesResponse.status
-        );
+        console.error("Expected array but received:", expensesData);
+        setExpenses([]);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching expenses:", err);
+      // Don't throw error for expenses as it's not critical for the app to function
+      setExpenses([]);
+    }
+  }, [getAuthHeaders]);
+
+  // Fetch products with proper error handling
+  const fetchProducts = useCallback(async (): Promise<void> => {
+    try {
+      console.log("📦 Fetching products...");
+      const headers = await getAuthHeaders();
+
+      // Check if we have Authorization header
+      if (!headers["Authorization"]) {
+        console.error("❌ No Authorization header found!");
+        throw new Error("Authentication token missing. Please login again.");
       }
 
-      // Set empty arrays for other data types
+      const productsResponse = await fetch(`${API_BASE}/inventory`, {
+        headers,
+      });
+
+      console.log("📊 Products response status:", productsResponse.status);
+
+      if (!productsResponse.ok) {
+        if (productsResponse.status === 401) {
+          console.error("❌ 401 Unauthorized - Token may be invalid");
+          throw new Error("Authentication failed. Please login again.");
+        } else if (productsResponse.status === 403) {
+          console.error("❌ 403 Forbidden - Insufficient permissions");
+          throw new Error("You don't have permission to access this resource.");
+        }
+        throw new Error(`Failed to fetch products: ${productsResponse.status}`);
+      }
+
+      const productsData = await productsResponse.json();
+      console.log(`✅ Received ${productsData.length} products`);
+
+      // Check if data is an array before mapping
+      if (Array.isArray(productsData)) {
+        setProducts(
+          productsData.map((product: any) => ({
+            id: product.id.toString(),
+            name: product.name || "Unknown",
+            type: product.type || "Regular",
+            stock: product.stock || 0,
+            price: product.price || 0,
+            lastUpdated:
+              product.updated_at?.split("T")[0] ||
+              new Date().toISOString().split("T")[0],
+          }))
+        );
+        console.log(`✅ Set ${productsData.length} products in state`);
+      } else {
+        console.error("Expected array but received:", productsData);
+        setProducts([]);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching products:", err);
+      // Don't throw error for products as it's not critical for the app to function
       setProducts([]);
+    }
+  }, [getAuthHeaders]);
+
+  // Main function to fetch all data
+  const fetchAllData = useCallback(async (): Promise<void> => {
+    console.log(
+      "🔄 fetchAllData called - User:",
+      user?.id,
+      "Auth loading:",
+      authLoading,
+      "Has fetched data:",
+      hasFetchedData
+    );
+
+    // Don't fetch if no user or auth is still loading or we've already fetched data
+    if (!user || authLoading || hasFetchedData) {
+      console.log(
+        "⏸️ Skipping data fetch - no user, auth loading, or already fetched"
+      );
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log("🚀 FETCHING DATA FOR USER:", user.id, user.email);
+
+      // Fetch all data in parallel
+      const results = await Promise.allSettled([
+        fetchCustomers(),
+        fetchSales(),
+        fetchExpenses(),
+        fetchProducts(),
+      ]);
+
+      // Check if any of the promises were rejected
+      const rejectedPromises = results.filter(
+        (result) => result.status === "rejected"
+      );
+      if (rejectedPromises.length > 0) {
+        console.warn(
+          `⚠️ ${rejectedPromises.length} data fetch operations failed`
+        );
+        // Don't set error state for non-critical failures
+      }
+
+      // Set empty array for deliveries for now
       setDeliveries([]);
+
+      // Mark that we've fetched data to prevent infinite loops
+      setHasFetchedData(true);
 
       console.log("🎉 Data fetch completed successfully!");
     } catch (err) {
@@ -312,7 +489,16 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [user, authLoading, session]);
+  }, [
+    user,
+    authLoading,
+    session,
+    fetchCustomers,
+    fetchSales,
+    fetchExpenses,
+    fetchProducts,
+    hasFetchedData,
+  ]);
 
   // Effect to fetch data when user changes
   useEffect(() => {
@@ -323,7 +509,7 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       authLoading
     );
 
-    if (user && !authLoading) {
+    if (user && !authLoading && !hasFetchedData) {
       console.log("🔄 User detected, fetching data...");
       fetchAllData();
     } else if (!user && !authLoading) {
@@ -335,27 +521,48 @@ export const StoreProvider: React.FC<{ children: ReactNode }> = ({
       setProducts([]);
       setDeliveries([]);
       setIsLoading(false);
+      setHasFetchedData(false);
     }
-  }, [user, authLoading, fetchAllData]);
+  }, [user, authLoading, fetchAllData, hasFetchedData]);
 
-  // Refresh functions
+  // Refresh functions - now each refreshes only its specific data
   const refreshCustomers = async (): Promise<void> => {
     console.log("🔄 Manual refresh customers");
-    await fetchAllData();
+    try {
+      await fetchCustomers();
+    } catch (err) {
+      console.error("Error refreshing customers:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to refresh customers"
+      );
+    }
   };
 
   const refreshExpenses = async (): Promise<void> => {
     console.log("🔄 Manual refresh expenses");
-    await fetchAllData();
+    try {
+      await fetchExpenses();
+    } catch (err) {
+      console.error("Error refreshing expenses:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to refresh expenses"
+      );
+    }
   };
 
   const refreshSales = async (): Promise<void> => {
     console.log("🔄 Manual refresh sales");
-    await fetchAllData();
+    try {
+      await fetchSales();
+    } catch (err) {
+      console.error("Error refreshing sales:", err);
+      setError(err instanceof Error ? err.message : "Failed to refresh sales");
+    }
   };
 
   const refreshAllData = async (): Promise<void> => {
     console.log("🔄 Manual refresh all data");
+    setHasFetchedData(false); // Reset the flag to allow refetching
     await fetchAllData();
   };
 
